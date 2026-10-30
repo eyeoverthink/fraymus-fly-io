@@ -7,6 +7,9 @@ import { saveImage, outputsDir, runPipeline } from '../pipeline'
 import type { Store } from '../store'
 import type { ToolSpec } from './llm'
 
+import { indexDoc } from '../memory/semantic'
+import { appendRecord } from '../memory/record'
+
 export type ToolCtx = {
   userId: string; agentId: string; threadId: string; depth: number; store: Store
   delegate: (agentId: string, task: string) => Promise<string>
@@ -76,12 +79,15 @@ async function webSearch(query: string) {
 export const builtinTools: Tool[] = [
   {
     name: 'memory_save', risk: 'safe', description: 'Save a durable fact or preference about the user or their work so it is remembered in future conversations.',
-    parameters: { type: 'object', properties: { text: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } }, required: ['text'] },
+    parameters: { type: 'object', properties: { text: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, scope: { type: 'string', enum: ['shared', 'agent'], description: 'shared (default) = every agent can recall it; agent = only this agent' } }, required: ['text'] },
     async run(a, c) {
       const text = String(a.text || '').trim().slice(0, 2000)
       if (!text) throw new Error('text required')
-      db.prepare('insert into memories(user_id,agent_id,text,tags,created_at) values(?,?,?,?,?)').run(c.userId, c.agentId, text, JSON.stringify(a.tags || []), now())
-      return { saved: true }
+      const r = db.prepare('insert into memories(user_id,agent_id,text,tags,created_at) values(?,?,?,?,?)').run(c.userId, c.agentId, text, JSON.stringify(a.tags || []), now())
+      const scope = a.scope === 'agent' ? 'agent' : 'shared'
+      indexDoc({ userId: c.userId, scope, agentId: c.agentId, threadId: c.threadId, kind: 'memory', text, source: `memories:${r.lastInsertRowid}` })
+      appendRecord('memory.save', { id: Number(r.lastInsertRowid), text, tags: a.tags || [], scope }, { userId: c.userId, agentId: c.agentId, threadId: c.threadId })
+      return { saved: true, scope }
     }
   },
   {

@@ -15,6 +15,7 @@ import { authenticateClerk } from './lib/clerk'
 import { reportRunUsage, createCheckout } from './billing'
 import { registerAgentRoutes } from './agent/routes'
 import { initAgents } from './agent/runtime'
+import { initMemory, registerMemoryRoutes, registerPublicRoutes } from './memory'
 import { initMcp } from './agent/mcp'
 import { startScheduler } from './agent/automations'
 import { registerOAuthRoutes, registerAccessRoutes } from './agent/auth'
@@ -287,12 +288,15 @@ fastify.post('/api/billing/checkout', async (req, reply) => {
 
 registerMediaTools()
 initAgents(store)
+initMemory()
 startScheduler()
 initMcp().then((s) => s.forEach((x) => console.log(`[mcp] ${x.name}: ${x.status}${x.detail ? ' (' + x.detail + ')' : ''} tools=${x.tools}`)))
 registerOAuthRoutes(fastify)
 registerMcpServer(fastify)
 registerAccessRoutes(fastify)
 registerAgentRoutes(fastify)
+registerMemoryRoutes(fastify)
+registerPublicRoutes(fastify)
 
 // Serve the built frontend when present (production / Docker)
 if (existsSync('./dist/index.html')) {

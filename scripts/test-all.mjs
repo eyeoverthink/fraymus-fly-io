@@ -30,6 +30,8 @@ try {
   }
   console.log('\n== scripts/test-shopify.mjs (own servers)')
   if (await run('scripts/test-shopify.mjs')) failed++
+  console.log('\n== scripts/test-memory.mjs (own servers)')
+  if (await run('scripts/test-memory.mjs')) failed++
 } catch (e) { console.error(e.message); failed++ } finally {
   stop()
   setTimeout(() => { try { rmSync(dataDir, { recursive: true, force: true }) } catch {} process.exit(failed ? 1 : 0) }, 1500)

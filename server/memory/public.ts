@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { db, now } from '../agent/db'
 import { chat, type Msg, type ToolSpec } from '../agent/llm'
 import { appendRecord } from './record'
+import { purgeUser } from '../library'
 import { formatHits, indexDoc, retrieve } from './semantic'
 import { queryAkashic, relate, stateSummary, upsertEntity } from './akashic'
 
@@ -78,6 +79,7 @@ export function forgetVisitor(vid: string) {
   for (const t of ['mem_docs', 'kg_entities', 'kg_relations', 'kg_decisions', 'kg_modules']) db.prepare(`delete from ${t} where user_id=?`).run(uid)
   db.prepare('delete from visitor_msgs where visitor_id=?').run(vid)
   db.prepare('delete from visitors where id=?').run(vid)
+  try { purgeUser(uid) } catch {}
 }
 export function purgeExpired() {
   const cutoff = now() - LIM().retentionDays * DAY

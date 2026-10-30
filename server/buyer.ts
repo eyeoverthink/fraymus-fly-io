@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import type { FastifyInstance } from 'fastify'
 import { normEmail, type Store } from './store'
 import { runPipeline, ENHANCE_GRAPH } from './pipeline'
+import { registerBuyerLibrary } from './library'
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex')
 const CODE_TTL = 10 * 60 * 1000
@@ -79,6 +80,8 @@ export function registerBuyerRoutes(app: FastifyInstance, store: Store, opts: { 
     const id = await store.getSession(sha(t))
     return id ? store.getUser(id) : null
   }
+
+  registerBuyerLibrary(app, buyer)
 
   app.get('/buyer/me', async (req, reply) => {
     const u = await buyer(req)

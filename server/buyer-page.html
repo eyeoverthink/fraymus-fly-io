@@ -23,19 +23,23 @@ button{background:#6d5dfc;border:0;cursor:pointer}button:disabled{opacity:.5}
   <button id="go">Enhance (1 credit)</button>
   <div id="rmsg" class="muted"></div>
   <div id="result"></div>
+  <h3 style="margin:18px 0 6px;font-size:14px">My library</h3><div id="lib" class="muted">Nothing yet.</div>
 </div>
 <script>
 const $=id=>document.getElementById(id);let tok=localStorage.getItem('fx_tok');
 const api=(p,b)=>fetch(p,{method:b?'POST':'GET',headers:{'Content-Type':'application/json',...(tok?{Authorization:'Bearer '+tok}:{})},body:b?JSON.stringify(b):undefined}).then(async r=>({ok:r.ok,status:r.status,j:await r.json().catch(()=>({}))}));
 async function me(){if(!tok)return;const r=await api('/buyer/me');if(!r.ok){tok=null;localStorage.removeItem('fx_tok');return}
-$('login').classList.add('hidden');$('app').classList.remove('hidden');$('who').textContent=r.j.email;$('credits').textContent=r.j.credits}
+$('login').classList.add('hidden');$('app').classList.remove('hidden');$('who').textContent=r.j.email;$('credits').textContent=r.j.credits;lib()}
+async function lib(){const r=await api('/buyer/library?limit=100');if(!r.ok)return;const L=$('lib');L.textContent='';if(!r.j.items.length){L.textContent='Nothing yet.';return}
+r.j.items.forEach(it=>{const d=document.createElement('div');d.style.margin='8px 0';const t=document.createElement('div');t.className='muted';t.textContent=new Date(it.createdAt).toLocaleString()+' · '+it.title+(it.status&&it.status!=='success'?' ('+it.status+')':'');d.appendChild(t);
+if(it.imageUrl){const a=document.createElement('a');a.href=it.imageUrl;a.download='fraymus.png';const i=document.createElement('img');i.src=it.imageUrl;i.loading='lazy';i.style.maxWidth='240px';a.appendChild(i);d.appendChild(a)}L.appendChild(d)})}
 $('send').onclick=async()=>{const r=await api('/buyer/login/start',{email:$('email').value});$('lmsg').textContent=r.j.message||r.j.error||'';if(r.ok)$('codeBox').classList.remove('hidden')}
 $('verify').onclick=async()=>{const r=await api('/buyer/login/verify',{email:$('email').value,code:$('code').value});if(!r.ok){$('lmsg').textContent=r.j.error;return}tok=r.j.token;localStorage.setItem('fx_tok',tok);me()}
 $('out').onclick=e=>{e.preventDefault();localStorage.removeItem('fx_tok');location.reload()}
 $('go').onclick=async()=>{$('go').disabled=true;$('rmsg').textContent='Running… this can take a minute.';$('result').textContent='';
 const r=await api('/buyer/enhance',{prompt:$('prompt').value});$('go').disabled=false;
 if(r.j.credits!==undefined)$('credits').textContent=r.j.credits;
-if(r.ok){$('rmsg').textContent='Done.';const a=document.createElement('a');a.href=r.j.imageUrl;a.download='fraymus.png';const i=document.createElement('img');i.src=r.j.imageUrl;a.appendChild(i);$('result').appendChild(a)}
+if(r.ok){lib();$('rmsg').textContent='Done.';const a=document.createElement('a');a.href=r.j.imageUrl;a.download='fraymus.png';const i=document.createElement('img');i.src=r.j.imageUrl;a.appendChild(i);$('result').appendChild(a)}
 else{$('rmsg').innerHTML='';const p=document.createElement('p');p.className='err';p.textContent=(r.j.error||'Run failed')+(r.j.refunded?' — credit refunded.':'');$('rmsg').appendChild(p);
 (r.j.steps||[]).filter(s=>s.error).forEach(s=>{const d=document.createElement('div');d.className='muted';d.textContent=s.id+': '+s.error;$('rmsg').appendChild(d)})}}
 me();

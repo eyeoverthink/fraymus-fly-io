@@ -2,8 +2,8 @@ import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import multipart from '@fastify/multipart'
 import { Server } from 'socket.io'
-import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, readFileSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runLlama, runFlux, runRemover, runUpscaler } from './services'
 import { createStore } from './store'
@@ -21,6 +21,7 @@ import { startScheduler } from './agent/automations'
 import { registerOAuthRoutes, registerAccessRoutes } from './agent/auth'
 import { registerMcpServer } from './agent/mcp-server'
 import { registerMediaTools } from './agent/media'
+import { addOutputFile, initLibrary, registerLibraryRoutes, upsertItem } from './library'
 import { accessTokenConfigured, gateMode, registerGateRoutes, workspaceAuthorized, workspaceAuthorizedHeaders } from './lib/workspace-gate'
 
 const PORT = Number(process.env.PORT || 3001)
@@ -54,6 +55,17 @@ fastify.addHook('onRequest', async (req, reply) => {
 })
 
 const baseUrl = (req: any) => process.env.PUBLIC_URL || `${req.protocol}://${req.headers.host}`
+// Canvas node endpoints return bytes directly; keep a copy in /outputs and register it in the Library
+function keepCanvasOutput(req: any, reply: any, png: Buffer, tool: string, title: string, meta: any = {}) {
+  try {
+    const name = `${Date.now()}-${randomBytes(12).toString('hex')}.png`
+    mkdirSync(outputsDir, { recursive: true })
+    writeFileSync(`${outputsDir}/${name}`, png)
+    const id = addOutputFile(name, { userId: req.userId, agentId: 'canvas', title, tags: ['canvas', tool], meta: { tool, ...meta } })
+    reply.header('X-Output-Url', `/outputs/${name}`)
+    if (id) reply.header('X-Library-Item', id)
+  } catch (e: any) { console.error('[library] canvas save failed:', e.message) }
+}
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'workflow'
 
 async function readImageInput(req: any): Promise<{ buffer: Buffer | null; fields: Record<string, any> }> {
@@ -116,7 +128,12 @@ fastify.post('/api/llama', async (req, reply) => {
   const { prompt, systemPrompt } = (req.body as any) || {}
   if (!prompt) return reply.status(400).send({ error: 'prompt required' })
   try {
-    return await runLlama(String(prompt), systemPrompt)
+    const r: any = await runLlama(String(prompt), systemPrompt)
+    try {
+      upsertItem({ type: 'canvas', sourceId: `llama:${Date.now()}-${randomBytes(6).toString('hex')}`, userId: (req as any).userId, agentId: 'canvas', title: `Prompt: ${String(prompt).slice(0, 120)}`,
+        preview: String(r?.text ?? r?.output ?? JSON.stringify(r)).slice(0, 400), tags: ['canvas', 'llama'], snapshot: { text: `Prompt: ${prompt}\n\n${r?.text ?? r?.output ?? JSON.stringify(r, null, 2)}`, data: { prompt, systemPrompt, result: r } } })
+    } catch {}
+    return r
   } catch (e: any) {
     return reply.status(500).send({ error: e.message, fallback: `Photorealistic ${prompt}, UGC style, iPhone flash, 4K` })
   }
@@ -127,6 +144,7 @@ fastify.post('/api/flux', async (req, reply) => {
   if (!prompt) return reply.status(400).send({ error: 'prompt required' })
   try {
     const { png, mocked } = await runFlux(String(prompt))
+    keepCanvasOutput(req, reply, png, 'flux', String(prompt), { prompt: String(prompt), mocked })
     return reply.header('Content-Type', 'image/png').header('X-Mocked', String(mocked)).send(png)
   } catch (e: any) {
     return reply.status(500).send({ error: e.message })
@@ -138,6 +156,7 @@ fastify.post('/api/remover', async (req, reply) => {
     const { buffer } = await readImageInput(req)
     if (!buffer) return reply.status(400).send({ error: 'No image file' })
     const { png, engine } = await runRemover(buffer)
+    keepCanvasOutput(req, reply, png, 'remover', 'Background removed', { engine })
     return reply.header('Content-Type', 'image/png').header('X-Remover', engine).send(png)
   } catch (e: any) {
     return reply.status(500).send({ error: e.message })
@@ -150,6 +169,7 @@ fastify.post('/api/upscaler', async (req, reply) => {
     if (!buffer) return reply.status(400).send({ error: 'No image' })
     const scale = Math.min(Math.max(parseInt(fields.scale) || 4, 1), 4)
     const { png, from, to, engine } = await runUpscaler(buffer, scale)
+    keepCanvasOutput(req, reply, png, 'upscaler', `Upscaled ${from} → ${to}`, { engine, from, to })
     return reply.header('Content-Type', 'image/png').header('X-Upscale-From', from).header('X-Upscale-To', to).header('X-Upscaler', engine).send(png)
   } catch (e: any) {
     return reply.status(500).send({ error: e.message })
@@ -297,6 +317,8 @@ registerAccessRoutes(fastify)
 registerAgentRoutes(fastify)
 registerMemoryRoutes(fastify)
 registerPublicRoutes(fastify)
+initLibrary()
+registerLibraryRoutes(fastify)
 
 // Serve the built frontend when present (production / Docker)
 if (existsSync('./dist/index.html')) {

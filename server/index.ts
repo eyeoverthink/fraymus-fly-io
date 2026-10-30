@@ -20,6 +20,7 @@ import { startScheduler } from './agent/automations'
 import { registerOAuthRoutes, registerAccessRoutes } from './agent/auth'
 import { registerMcpServer } from './agent/mcp-server'
 import { registerMediaTools } from './agent/media'
+import { gateMode, registerGateRoutes, workspaceAuthorized, workspaceAuthorizedHeaders } from './lib/workspace-gate'
 
 const PORT = Number(process.env.PORT || 3001)
 const fastify = Fastify({ logger: true })
@@ -30,17 +31,21 @@ const authRequired = !!process.env.CLERK_SECRET_KEY
 const LOCAL_USER = 'local'
 
 async function currentUser(req: any): Promise<string | null> {
-  if (!authRequired) return LOCAL_USER
+  // Without Clerk, the workspace is one local user behind the shared-secret gate (fails closed if no token is set)
+  if (!authRequired) return workspaceAuthorized(req) ? LOCAL_USER : null
   const a = await authenticateClerk(req)
   return a.authenticated ? (a.userId as string) : null
 }
 
 // Every /api route except the deployed run endpoint needs a signed-in user when auth is configured
+// Without Clerk, the workspace UI entry (/, /index.html) also needs the access gate; buyer, webhook, outputs and health stay public.
+const isSpaEntry = (path: string) => path === '/' || path === '/index.html'
 fastify.addHook('onRequest', async (req, reply) => {
   const path = req.url.split('?')[0]
+  if (!authRequired && req.method === 'GET' && isSpaEntry(path) && !workspaceAuthorized(req)) return reply.redirect('/login')
   if (!path.startsWith('/api/') || /^\/api\/workflows\/[^/]+\/run$/.test(path)) return
   const uid = await currentUser(req)
-  if (!uid) return reply.status(401).send({ error: 'Sign in required' })
+  if (!uid) return reply.status(401).send(authRequired ? { error: 'Sign in required' } : { error: 'Workspace access token required', login: '/login' })
   ;(req as any).userId = uid
 })
 
@@ -68,7 +73,8 @@ async function readImageInput(req: any): Promise<{ buffer: Buffer | null; fields
   return { buffer: null, fields: body }
 }
 
-fastify.get('/health', async () => ({ ok: true, store: store.kind }))
+fastify.get('/health', async () => ({ ok: true, store: store.kind, workspaceAuth: gateMode() }))
+registerGateRoutes(fastify)
 
 fastify.get('/outputs/:name', async (req, reply) => {
   const { name } = req.params as any
@@ -291,6 +297,7 @@ if (existsSync('./dist/index.html')) {
   await fastify.register(fastifyStatic, { root: fileURLToPath(new URL('../dist/', import.meta.url)), wildcard: false })
   fastify.setNotFoundHandler((req, reply) => {
     if (req.url.startsWith('/api/')) return reply.status(404).send({ error: 'Not found' })
+    if (!authRequired && !workspaceAuthorized(req)) return reply.redirect('/login')
     return reply.sendFile('index.html')
   })
 }
@@ -299,10 +306,11 @@ await fastify.listen({ port: PORT, host: process.env.HOST || '0.0.0.0' })
 const io = new Server(fastify.server, { cors: { origin: process.env.CORS_ORIGIN?.split(',') || true } })
 // @ts-ignore
 fastify.io = io
+if (!authRequired) io.use((socket, next) => (workspaceAuthorizedHeaders(socket.handshake.headers) ? next() : next(new Error('Workspace access token required'))))
 
 io.on('connection', (socket) => {
   socket.on('canvas:update', (data) => socket.broadcast.emit('canvas:update', data))
   socket.on('rea:request', () => io.emit('rea:suggestion', { suggestion: '💡 REA: Thinking...', timestamp: Date.now() }))
 })
 
-console.log(`NODULAR WORKSPACE on :${PORT} | store=${store.kind} | auth=${authRequired ? 'clerk' : 'open (local user)'}`)
+console.log(`NODULAR WORKSPACE on :${PORT} | store=${store.kind} | auth=${authRequired ? 'clerk' : `workspace gate: ${gateMode()}`}`)

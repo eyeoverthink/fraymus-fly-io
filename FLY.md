@@ -20,9 +20,19 @@ Required:
 - `MAIL_FROM`
 - `PUBLIC_URL` (e.g. `https://fraymus-fly-io.fly.dev`)
 
+Workspace (agents + chat UI at `/`):
+
+- `WORKSPACE_ACCESS_TOKEN` (random, >= 24 chars, e.g. `openssl rand -hex 24`). Without Clerk this is the
+  shared secret for the workspace: open `https://fraymus-fly-io.fly.dev/login` and paste it once (sets a 30-day
+  httpOnly cookie), or send `Authorization: Bearer <token>` to `/api/*`. If it's missing, the workspace fails
+  closed (every `/api/*` returns 401). Never gated: `/health`, `/enhance`, `/buyer/*`, `/webhooks/shopify`, `/outputs/*`.
+- `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`: the agents' chat model (`LLM_PROVIDERS=openai,groq`).
+  Hostinger AI Router: `OPENAI_BASE_URL=https://router.hostinger.com/v1`, `OPENAI_MODEL=gpt-5.6-luna`
+  (`OPENAI_USER_AGENT` is set in `fly.toml`; the router needs a non-default UA). Or `GROQ_API_KEY`.
+
 Recommended / optional:
 
-- `CLERK_SECRET_KEY` (without it the workspace `/api/*` is open; the buyer `/enhance` page and webhooks don't need it)
+- `CLERK_SECRET_KEY` (replaces the shared-secret gate with Clerk sign-in; the buyer `/enhance` page and webhooks don't need it)
 - `VITE_CLERK_PUBLISHABLE_KEY` (build arg: `fly deploy --build-arg VITE_CLERK_PUBLISHABLE_KEY=...`)
 - `REPLICATE_API_TOKEN` (real AI upscale; otherwise a lanczos3 resize)
 

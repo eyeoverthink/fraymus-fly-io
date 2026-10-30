@@ -71,6 +71,6 @@ pointing at `https://<app>.fly.dev/webhooks/shopify`, and copy the signing secre
 (if you create them from a custom app instead, the secret is that app's client secret).
 Test with a 100%-off discount code before announcing: one purchase → `/enhance` shows 25 → one run → 24 and a 4096px transparent PNG.
 
-Leave the workspace UI locked: without `CLERK_SECRET_KEY` every `/api/*` route is open to anyone who finds the URL, and `/api/me` credits are shared by everyone as the `local` user.
+Keep the workspace UI locked: without `CLERK_SECRET_KEY`, set `WORKSPACE_ACCESS_TOKEN` (random, >= 24 chars) and sign in once at `/login`. With neither set, every `/api/*` route returns 401 (fail closed). For local dev only, `WORKSPACE_AUTH=off` restores the open `local` user.
 
 Local tests: `npm run test:shopify` (signed fake webhooks, idempotency, refunds/cancel, login, strict-fail refund, credit-spend run to 4096px PNG).

@@ -16,7 +16,7 @@ async function boot(extra) {
   const port = String(3600 + Math.floor(Math.random() * 300))
   const dataDir = mkdtempSync(join(tmpdir(), 'shopify-test-'))
   const env = { ...process.env, PORT: port, HOST: '127.0.0.1', DATA_DIR: dataDir, LLM_PROVIDERS: 'none', SCHEDULER: 'off',
-    SHOPIFY_WEBHOOK_SECRET: SECRET, BUYER_CODE_DEV_ECHO: '1', NODE_ENV: 'test',
+    SHOPIFY_WEBHOOK_SECRET: SECRET, BUYER_CODE_DEV_ECHO: '1', NODE_ENV: 'test', WORKSPACE_AUTH: 'off', WORKSPACE_ACCESS_TOKEN: '',
     GROQ_API_KEY: '', HF_TOKEN: '', REPLICATE_API_TOKEN: '', OPENAI_API_KEY: '', OPENAI_BASE_URL: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', ...extra }
   const p = spawn('npx', ['tsx', 'server/index.ts'], { env, stdio: process.env.DEBUG ? 'inherit' : 'ignore' })
   const base = `http://127.0.0.1:${port}`

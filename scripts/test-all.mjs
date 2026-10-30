@@ -8,7 +8,7 @@ const port = String(3100 + Math.floor(Math.random() * 500))
 const base = `http://localhost:${port}`
 const dataDir = mkdtempSync(join(tmpdir(), 'nodular-test-'))
 const win = process.platform === 'win32'
-const env = { ...process.env, PORT: port, DATA_DIR: dataDir, LLM_PROVIDERS: 'none', FREE_CREDITS: '5', BASE: base, BASE_URL: base }
+const env = { ...process.env, PORT: port, DATA_DIR: dataDir, LLM_PROVIDERS: 'none', FREE_CREDITS: '5', BASE: base, BASE_URL: base, WORKSPACE_AUTH: 'off', WORKSPACE_ACCESS_TOKEN: '', CLERK_SECRET_KEY: '' }
 const server = spawn(win ? 'npx.cmd' : 'npx', ['tsx', 'server/index.ts'], { env, stdio: 'ignore', shell: win })
 const stop = () => { if (win) spawn('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' }); else server.kill() }
 

@@ -9,6 +9,10 @@ primary_region = 'ams'
 [build]
   dockerfile = 'Dockerfile'
 
+  # Clerk publishable key (public by design: it ships in the browser bundle). The secret key is a Fly secret, never in git.
+  [build.args]
+    VITE_CLERK_PUBLISHABLE_KEY = 'pk_test_Y2xvc2UtcHVnLTI2LmNsZXJrLmFjY291bnRzLmRldiQ'
+
 [deploy]
   strategy = 'immediate'
 

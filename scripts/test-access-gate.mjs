@@ -87,5 +87,28 @@ async function publicRoutes(base, label) {
   } finally { s.stop() }
 }
 
+// --- clerk mode with the access-token fallback (fake sk_test_ key: no Clerk network call unless a JWT is sent)
+{
+  const s = await boot({ CLERK_SECRET_KEY: 'sk_test_' + randomBytes(24).toString('hex'), WORKSPACE_ACCESS_TOKEN: TOKEN })
+  try {
+    const h = await (await get(s.base, '/health')).json()
+    ok(h.workspaceAuth === 'clerk' && h.clerk === true && h.accessToken === true, 'clerk: /health reports clerk + accessToken')
+    for (const p of ['/api/agents', '/api/me', '/api/agent/status']) {
+      const r = await get(s.base, p); ok(r.status === 401, `clerk: unauthenticated GET ${p} -> 401 (${r.status})`)
+    }
+    ok((await get(s.base, '/api/agents', { Authorization: 'Bearer ' + randomBytes(24).toString('hex') })).status === 401, 'clerk: wrong bearer -> 401')
+    ok((await get(s.base, '/api/agents', { Authorization: 'Bearer a.b.c' })).status === 401, 'clerk: invalid JWT -> 401')
+    const good = await get(s.base, '/api/agents', { Authorization: 'Bearer ' + TOKEN })
+    ok(good.status === 200, `clerk: access-token bearer still -> 200 (${good.status})`)
+    const lp = await get(s.base, '/login'); ok(lp.status === 200 && (await lp.text()).includes('access token'), 'clerk: GET /login still shows the token form')
+    const login = await fetch(s.base + '/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'token=' + TOKEN })
+    const cookie = (login.headers.get('set-cookie') || '').split(';')[0]
+    ok(login.status === 303 && cookie.startsWith('ws_access='), `clerk: /login correct -> 303 + cookie (${login.status})`)
+    ok((await get(s.base, '/api/agents', { Cookie: cookie })).status === 200, 'clerk: cookie -> /api/agents 200')
+    const ui = await get(s.base, '/'); ok(ui.status !== 302, `clerk: workspace UI served for Clerk sign-in, not redirected (${ui.status})`)
+    await publicRoutes(s.base, 'clerk')
+  } finally { s.stop() }
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nall access-gate checks passed')
 process.exit(failures ? 1 : 0)

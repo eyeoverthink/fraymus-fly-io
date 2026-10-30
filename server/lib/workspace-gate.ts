@@ -1,6 +1,7 @@
-// Shared-secret gate for the workspace (agents, chat, canvas, /api/*) when Clerk isn't configured.
+// Shared-secret gate for the workspace (agents, chat, canvas, /api/*).
 // Modes:
-//   clerk  - CLERK_SECRET_KEY set: Clerk handles /api auth, this gate stays out of the way
+//   clerk  - CLERK_SECRET_KEY set: Clerk sign-in handles /api auth; if WORKSPACE_ACCESS_TOKEN is also set,
+//            the Bearer token / /login cookie still works as an owner fallback (acts as the local user)
 //   token  - WORKSPACE_ACCESS_TOKEN set (>= 24 chars): Bearer header or the httpOnly cookie from /login
 //   off    - WORKSPACE_AUTH=off and no token: open local user (local dev / test suites only)
 //   closed - none of the above: every workspace request is denied (fail closed)
@@ -17,6 +18,7 @@ const token = () => {
   const t = (process.env.WORKSPACE_ACCESS_TOKEN || '').trim()
   return t.length >= 24 ? t : ''
 }
+export const accessTokenConfigured = () => !!token()
 export function gateMode(): GateMode {
   if (process.env.CLERK_SECRET_KEY) return 'clerk'
   if (token()) return 'token'
@@ -36,12 +38,13 @@ function cookie(req: FastifyRequest, name: string): string {
   return ''
 }
 
-// True when the request may use the workspace (only meaningful when Clerk is not configured).
+// True when the request carries the shared access token (Bearer or /login cookie), or the gate is off.
+// Works in token mode and, as an owner fallback, in clerk mode when WORKSPACE_ACCESS_TOKEN is set.
 export function workspaceAuthorized(req: FastifyRequest): boolean {
   const mode = gateMode()
   if (mode === 'off') return true
-  if (mode !== 'token') return false
   const t = token()
+  if (!t) return false
   const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim()
   if (bearer && eq(bearer, t)) return true
   const c = cookie(req, COOKIE)
@@ -78,13 +81,12 @@ export function registerGateRoutes(app: FastifyInstance) {
 
   app.get('/login', async (req, reply) => {
     const mode = gateMode()
-    if (mode === 'clerk' || mode === 'off' || workspaceAuthorized(req)) return reply.redirect('/')
+    if (mode === 'off' || (mode === 'clerk' && !token()) || workspaceAuthorized(req)) return reply.redirect('/')
     return html(reply, 200, mode === 'closed' ? 'Workspace access is not configured on this server (WORKSPACE_ACCESS_TOKEN is missing).' : '')
   })
 
   app.post('/login', async (req, reply) => {
-    const mode = gateMode()
-    if (mode !== 'token') return html(reply, 403, 'Workspace access is not configured on this server.')
+    if (!token()) return html(reply, 403, 'Workspace access is not configured on this server.')
     if (throttled(req.ip)) return html(reply, 429, 'Too many attempts. Wait a minute and try again.')
     const b: any = req.body || {}
     const given = String(b.token || '').trim()

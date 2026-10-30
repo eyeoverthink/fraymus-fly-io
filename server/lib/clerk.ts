@@ -6,10 +6,12 @@ export async function authenticateClerk(req: any) {
   const secret = process.env.CLERK_SECRET_KEY
   if (!secret) return { userId: null, authenticated: false, reason: 'No CLERK_SECRET_KEY - running open' }
 
-  const authHeader = req.headers.authorization || req.headers['x-clerk-auth'] || ''
-  const token = authHeader.replace('Bearer ', '') || req.cookies?.__session || ''
+  const authHeader = String(req.headers.authorization || req.headers['x-clerk-auth'] || '')
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim() || req.cookies?.__session || sessionCookie(req.headers.cookie)
 
   if (!token) return { userId: null, authenticated: false, reason: 'No token' }
+  // Only JWTs can be Clerk session tokens; anything else (e.g. the workspace access token) is not ours to verify
+  if (token.split('.').length !== 3) return { userId: null, authenticated: false, reason: 'Not a Clerk token' }
 
   try {
     const payload = await verifyToken(token, { secretKey: secret })
@@ -18,6 +20,14 @@ export async function authenticateClerk(req: any) {
     console.warn('Clerk verify failed', e.message)
     return { userId: null, authenticated: false, reason: e.message }
   }
+}
+
+function sessionCookie(header: unknown): string {
+  for (const part of String(header || '').split(';')) {
+    const i = part.indexOf('=')
+    if (i > 0 && part.slice(0, i).trim() === '__session') return decodeURIComponent(part.slice(i + 1).trim())
+  }
+  return ''
 }
 
 export function clerkPreHandler() {

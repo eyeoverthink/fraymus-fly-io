@@ -20,7 +20,7 @@ import { startScheduler } from './agent/automations'
 import { registerOAuthRoutes, registerAccessRoutes } from './agent/auth'
 import { registerMcpServer } from './agent/mcp-server'
 import { registerMediaTools } from './agent/media'
-import { gateMode, registerGateRoutes, workspaceAuthorized, workspaceAuthorizedHeaders } from './lib/workspace-gate'
+import { accessTokenConfigured, gateMode, registerGateRoutes, workspaceAuthorized, workspaceAuthorizedHeaders } from './lib/workspace-gate'
 
 const PORT = Number(process.env.PORT || 3001)
 const fastify = Fastify({ logger: true })
@@ -31,10 +31,13 @@ const authRequired = !!process.env.CLERK_SECRET_KEY
 const LOCAL_USER = 'local'
 
 async function currentUser(req: any): Promise<string | null> {
-  // Without Clerk, the workspace is one local user behind the shared-secret gate (fails closed if no token is set)
-  if (!authRequired) return workspaceAuthorized(req) ? LOCAL_USER : null
-  const a = await authenticateClerk(req)
-  return a.authenticated ? (a.userId as string) : null
+  // A valid Clerk session wins; otherwise the shared access token (Bearer or /login cookie) is the owner's local user.
+  // Without Clerk that gate is the only way in (fails closed if no token is set).
+  if (authRequired) {
+    const a = await authenticateClerk(req)
+    if (a.authenticated) return a.userId as string
+  }
+  return workspaceAuthorized(req) ? LOCAL_USER : null
 }
 
 // Every /api route except the deployed run endpoint needs a signed-in user when auth is configured
@@ -73,7 +76,7 @@ async function readImageInput(req: any): Promise<{ buffer: Buffer | null; fields
   return { buffer: null, fields: body }
 }
 
-fastify.get('/health', async () => ({ ok: true, store: store.kind, workspaceAuth: gateMode() }))
+fastify.get('/health', async () => ({ ok: true, store: store.kind, workspaceAuth: gateMode(), clerk: authRequired, accessToken: accessTokenConfigured() }))
 registerGateRoutes(fastify)
 
 fastify.get('/outputs/:name', async (req, reply) => {
@@ -306,11 +309,20 @@ await fastify.listen({ port: PORT, host: process.env.HOST || '0.0.0.0' })
 const io = new Server(fastify.server, { cors: { origin: process.env.CORS_ORIGIN?.split(',') || true } })
 // @ts-ignore
 fastify.io = io
-if (!authRequired) io.use((socket, next) => (workspaceAuthorizedHeaders(socket.handshake.headers) ? next() : next(new Error('Workspace access token required'))))
+io.use(async (socket, next) => {
+  const h = socket.handshake.headers
+  if (workspaceAuthorizedHeaders(h)) return next()
+  if (authRequired) {
+    const t = String((socket.handshake.auth as any)?.token || '')
+    const a = await authenticateClerk({ headers: { ...h, ...(t ? { authorization: `Bearer ${t}` } : {}) } })
+    if (a.authenticated) return next()
+  }
+  next(new Error(authRequired ? 'Sign in required' : 'Workspace access token required'))
+})
 
 io.on('connection', (socket) => {
   socket.on('canvas:update', (data) => socket.broadcast.emit('canvas:update', data))
   socket.on('rea:request', () => io.emit('rea:suggestion', { suggestion: '💡 REA: Thinking...', timestamp: Date.now() }))
 })
 
-console.log(`NODULAR WORKSPACE on :${PORT} | store=${store.kind} | auth=${authRequired ? 'clerk' : `workspace gate: ${gateMode()}`}`)
+console.log(`NODULAR WORKSPACE on :${PORT} | store=${store.kind} | auth=${authRequired ? `clerk${accessTokenConfigured() ? ' + access-token fallback' : ''}` : `workspace gate: ${gateMode()}`}`)

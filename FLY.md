@@ -45,5 +45,6 @@ Override in `fly.toml` [env] if needed: `PROMPT_LLM`, `PROMPT_LLM_BASE_URL`, `PR
     fly deploy -a fraymus-fly-io
     curl https://fraymus-fly-io.fly.dev/health
 
-Only point the Shopify webhooks at one server (this Fly app or the VPS), not both, or
-each paid order would be recorded twice in two separate databases.
+The Shopify webhooks point at this Fly app only (owned by the Chandra-Fraymus app). The VPS copy
+(2.24.68.223, /opt/fraymus-credits) is old and not production; never point webhooks at it too, or
+each paid order would be recorded twice in two separate databases. See docs/FLY-CANON.md.

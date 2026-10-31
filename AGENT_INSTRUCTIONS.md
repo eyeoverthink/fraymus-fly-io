@@ -1,3 +1,5 @@
+> **Agents: read [docs/FLY-CANON.md](docs/FLY-CANON.md) first.** This repo is the LIVE Fly app `fraymus-fly-io`. Do not deploy, change Fly secrets, touch Shopify webhooks or wipe `/data` without Vaughn's go-ahead. The scaffold brief below is historical.
+
 
 # AGENT INSTRUCTIONS - FOR CODEX / DEVIN / DUMB AGENT
 

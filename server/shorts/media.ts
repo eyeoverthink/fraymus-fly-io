@@ -208,8 +208,11 @@ export async function finalEdit(o: { cwd: string; segments: Segment[]; voice: st
 
 /** Integrated loudness (LUFS) of a file's audio, measured with FFmpeg's EBU R128 scanner. */
 export async function loudness(file: string): Promise<number | null> {
-  const r = await sh(FF(), ['-hide_banner', '-nostats', '-i', file, '-af', 'ebur128=framelog=quiet', '-f', 'null', '-'], { timeoutMs: 5 * 60_000 })
-  const m = [...r.err.matchAll(/I:\s+(-?[\d.]+) LUFS/g)].pop()
+  // Plain `ebur128` (no framelog=quiet: FFmpeg 5.1 in Debian bookworm rejects that value and then prints a bogus 0.0 summary).
+  // Read the integrated value from the final summary block only, and only when FFmpeg finished cleanly.
+  const r = await sh(FF(), ['-hide_banner', '-nostats', '-i', file, '-vn', '-af', 'ebur128', '-f', 'null', '-'], { timeoutMs: 5 * 60_000 })
+  if (r.code !== 0) return null
+  const m = [...r.err.matchAll(/Integrated loudness:\s*\n\s*I:\s+(-?[\d.]+) LUFS/g)].pop()
   return m ? Number(m[1]) : null
 }
 

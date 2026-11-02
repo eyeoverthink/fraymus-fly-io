@@ -17,7 +17,10 @@ ADD --checksum=sha256:6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/medium/en_US-ljspeech-medium.onnx /opt/piper-voices/en_US-ljspeech-medium.onnx
 ADD --checksum=sha256:141d612cc0a95ed7efc1ca936b845c2364967f2e9217c5dbfcf69fc4d6c65860 \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/medium/en_US-ljspeech-medium.onnx.json /opt/piper-voices/en_US-ljspeech-medium.onnx.json
-RUN tar -xzf /tmp/piper.tgz -C /opt && rm /tmp/piper.tgz && chmod 644 /opt/piper-voices/* \
+RUN printf '%s  %s\n' a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992 /tmp/piper.tgz \
+    6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22 /opt/piper-voices/en_US-ljspeech-medium.onnx \
+    141d612cc0a95ed7efc1ca936b845c2364967f2e9217c5dbfcf69fc4d6c65860 /opt/piper-voices/en_US-ljspeech-medium.onnx.json | sha256sum -c - \
+  && tar -xzf /tmp/piper.tgz -C /opt && rm /tmp/piper.tgz && chmod 644 /opt/piper-voices/* \
   && echo "It works." | /opt/piper/piper --model /opt/piper-voices/en_US-ljspeech-medium.onnx --output_file /tmp/t.wav && rm /tmp/t.wav
 ENV PIPER_BIN=/opt/piper/piper PIPER_MODEL=/opt/piper-voices/en_US-ljspeech-medium.onnx
 ENV NODE_ENV=production PORT=3001 DATA_DIR=/data

@@ -97,3 +97,6 @@ Everything Base44 did for agents now runs here, free and self-hosted. Other agen
 ## Automations (scheduler)
 
 Cron-scheduled (5-field, **UTC**) agent runs or tool calls, replacing Base44 scheduled automations. Manage via `/api/automations` or the MCP tools `list_automations`, `upsert_automation` (admin), `run_automation`, `automation_runs`, `delete_automation`. Templates (`daily-report`, `six-hour-research`, `heartbeat`) install disabled. Unattended agent runs never auto-approve risky tools; they end as `awaiting_approval`. Tool automations call the tool directly (admin-created only). Set `SCHEDULER=off` to disable the ticker. Not ported: LinkedIn, Google Calendar and Base44-entity triggers (no native equivalent), and data-change triggers (use `POST /api/automations/:id/trigger` from a webhook).
+
+## Story Shorts (offline pipeline)
+Vertical cartoon story shorts from a narration, made from free offline tools only (FFmpeg, sharp, espeak-ng/Piper): plan → voice → pictures → clips → sound → captions/edit → QA. Each stage is checked before the next and saved to the Library (`pipeline`). GPU renders from the PC can replace any shot. See [docs/STORY-SHORTS.md](docs/STORY-SHORTS.md); test: `npm run test:shorts`.

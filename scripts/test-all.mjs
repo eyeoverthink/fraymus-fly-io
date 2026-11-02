@@ -34,6 +34,8 @@ try {
   if (await run('scripts/test-memory.mjs')) failed++
   console.log('\n== scripts/test-library.mjs (own servers)')
   if (await run('scripts/test-library.mjs')) failed++
+  console.log('\n== scripts/test-shorts.mjs (own server)')
+  if (await run('scripts/test-shorts.mjs')) failed++
 } catch (e) { console.error(e.message); failed++ } finally {
   stop()
   setTimeout(() => { try { rmSync(dataDir, { recursive: true, force: true }) } catch {} process.exit(failed ? 1 : 0) }, 1500)

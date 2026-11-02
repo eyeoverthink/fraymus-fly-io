@@ -126,7 +126,7 @@ export function buildPlan(input: { title?: string; story: string; shots?: number
   const others = cast.filter((c) => c.id !== main.id)
   const hasMain: boolean[] = []
   const shots: Shot[] = texts.map((text, i) => {
-    const named = others.filter((c) => new RegExp(`\\b${c.name.split(' ')[0]}\\b`, 'i').test(text))
+    const named = others.filter((c) => { const first = (c.name.split(' ')[0] || '').slice(0, 64).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); return !!first && new RegExp(`\\b${first}\\b`, 'i').test(text) })
     // main character in most shots: skip only on wide "establishing" lines with no person, never twice in a row
     const establishing = i > 0 && /\b(ships?|island|map|satellites?|radar|army|troops|soldiers)\b/i.test(text) && !/\byou\b/i.test(text)
     const prevNoMain = i > 0 && !hasMain[i - 1]

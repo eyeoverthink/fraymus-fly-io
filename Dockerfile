@@ -1,5 +1,8 @@
 FROM node:24-slim
 WORKDIR /app
+# Story Shorts (server/shorts): free offline media tools. ffmpeg = clips/sfx/edit/captions/loudness, espeak-ng = offline voice,
+# DejaVu = caption font. GPU stages (pictures, image-to-video, Whisper) run on the PC/Pi and upload per shot.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak-ng fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production PORT=3001 DATA_DIR=/data
 
 COPY package.json package-lock.json ./

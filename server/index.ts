@@ -22,6 +22,7 @@ import { registerOAuthRoutes, registerAccessRoutes } from './agent/auth'
 import { registerMcpServer } from './agent/mcp-server'
 import { registerMediaTools } from './agent/media'
 import { addOutputFile, initLibrary, registerLibraryRoutes, upsertItem } from './library'
+import { initShorts, registerShortsRoutes } from './shorts'
 import { accessTokenConfigured, gateMode, registerGateRoutes, workspaceAuthorized, workspaceAuthorizedHeaders } from './lib/workspace-gate'
 
 const PORT = Number(process.env.PORT || 3001)
@@ -319,6 +320,8 @@ registerMemoryRoutes(fastify)
 registerPublicRoutes(fastify)
 initLibrary()
 registerLibraryRoutes(fastify)
+initShorts()
+registerShortsRoutes(fastify)
 
 // Serve the built frontend when present (production / Docker)
 if (existsSync('./dist/index.html')) {

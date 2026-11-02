@@ -1,5 +1,5 @@
 // Library: one index of everything created in the app (images/media, chats, evolve jobs, fossils,
-// proven patterns, memories, AkashicRecord entries, canvas workflows/runs, buyer outputs).
+// proven patterns, memories, AkashicRecord entries, canvas workflows/runs, buyer outputs, story-shorts pipeline stages).
 // The index lives in agent.db (lib_items + lib_fts). Media stays in DATA_DIR/outputs; text items are
 // snapshotted to DATA_DIR/library/<type>/<id>.json so they survive deletion of their source.
 // Nothing here is auto-purged except items owned by anonymous visitors (follows the visitor retention rules).
@@ -13,7 +13,7 @@ import { zipStream, type ZipEntry } from './zip'
 
 const DATA = () => process.env.DATA_DIR || './data'
 const abs = (rel: string) => `${DATA()}/${rel}`
-export const LIB_TYPES = ['image', 'media', 'chat', 'evolve', 'fossil', 'pattern', 'memory', 'akashic', 'canvas', 'buyer'] as const
+export const LIB_TYPES = ['image', 'media', 'chat', 'evolve', 'fossil', 'pattern', 'memory', 'akashic', 'canvas', 'buyer', 'pipeline'] as const
 export type LibType = typeof LIB_TYPES[number]
 const OWNER = 'local'
 export const isOwner = (uid: string) => uid === OWNER || (process.env.OWNER_USER_IDS || '').split(',').map((s) => s.trim()).filter(Boolean).includes(uid)

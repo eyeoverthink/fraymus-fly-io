@@ -2,7 +2,8 @@
 // captions, loudness), sharp (storyboard frames, picture checks), espeak-ng or Piper (voice). No network calls.
 // GPU-only stages (diffusion pictures, image-to-video) run on the PC/Pi/VPS and are uploaded as assets instead.
 import { spawn } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, rmSync, statSync } from 'node:fs'
+import { basename } from 'node:path'
 import sharp from 'sharp'
 import type { CastMember, Motion, Shot } from './plan'
 
@@ -35,9 +36,13 @@ export async function hasBin(bin: string, arg = '-version') {
   return probes.get(bin)!
 }
 export async function toolStatus() {
+  const model = process.env.PIPER_MODEL
+  const piper = !!(model && existsSync(model) && existsSync(model + '.json') && await hasBin(process.env.PIPER_BIN || 'piper', '--help'))
+  const espeak = await hasBin(process.env.ESPEAK_BIN || 'espeak-ng', '--version')
   return {
-    ffmpeg: await hasBin(FF()), ffprobe: await hasBin(FP()), espeak: await hasBin(process.env.ESPEAK_BIN || 'espeak-ng', '--version'),
-    piper: !!(process.env.PIPER_MODEL && existsSync(process.env.PIPER_MODEL) && await hasBin(process.env.PIPER_BIN || 'piper', '--help'))
+    ffmpeg: await hasBin(FF()), ffprobe: await hasBin(FP()), espeak, piper,
+    piperVoice: piper ? basename(model!).replace(/\.onnx$/, '') : null,
+    voice: piper ? 'piper' : espeak ? 'espeak-ng' : 'silent-guide' // the engine the voice stage will try first
   }
 }
 
@@ -139,19 +144,29 @@ export async function checkClip(file: string, w = 1080, h = 1920, minSeconds = 1
 }
 
 // ---------- voice ----------
-/** Offline narration: Piper if a voice model is configured, else espeak-ng, else a silent guide track. */
-export async function synthVoice(text: string, out: string, estSeconds: number): Promise<{ engine: string; seconds: number; err?: string }> {
+/** Offline narration: Piper (natural neural voice, CPU, ~100 MB RAM) if a voice model is configured, else espeak-ng,
+ *  else a silent guide track. A failed engine falls through to the next one and the reason is returned as `fallback`. */
+export async function synthVoice(text: string, out: string, estSeconds: number): Promise<{ engine: string; seconds: number; err?: string; fallback?: string }> {
   const t = await toolStatus()
+  const fell: string[] = []
+  const good = () => existsSync(out) && statSync(out).size > 1000
   if (t.piper) {
-    const r = await sh(process.env.PIPER_BIN || 'piper', ['--model', process.env.PIPER_MODEL!, '--output_file', out], { input: text, timeoutMs: 5 * 60_000 })
-    if (r.code === 0 && existsSync(out)) return { engine: 'piper', seconds: await duration(out) }
+    rmSync(out, { force: true })
+    // Piper (medium voice) runs ~20x faster than real time on CPU and needs ~100-200 MB, fine on the 2 GB machine
+    const args = ['--model', process.env.PIPER_MODEL!, '--output_file', out, '--sentence_silence', process.env.PIPER_SENTENCE_SILENCE || '0.25']
+    if (process.env.PIPER_LENGTH_SCALE) args.push('--length_scale', process.env.PIPER_LENGTH_SCALE)
+    const r = await sh(process.env.PIPER_BIN || 'piper', args, { input: text.replace(/\s+/g, ' ').trim() + '\n', timeoutMs: 5 * 60_000 })
+    if (r.code === 0 && good()) { const seconds = await duration(out); if (seconds > 0) return { engine: 'piper', seconds } }
+    fell.push(`piper failed (exit ${r.code}): ${tail(r.err, 200).trim()}`)
   }
   if (t.espeak) {
+    rmSync(out, { force: true })
     const r = await sh(process.env.ESPEAK_BIN || 'espeak-ng', ['-v', process.env.ESPEAK_VOICE || 'en-us', '-s', process.env.ESPEAK_WPM || '165', '-w', out, text], { timeoutMs: 2 * 60_000 })
-    if (r.code === 0 && existsSync(out) && statSync(out).size > 1000) return { engine: 'espeak-ng', seconds: await duration(out) }
+    if (r.code === 0 && good()) return { engine: 'espeak-ng', seconds: await duration(out), fallback: fell.join('; ') || undefined }
+    fell.push(`espeak-ng failed (exit ${r.code})`)
   }
   const r = await ff(['-f', 'lavfi', '-i', `anullsrc=r=24000:cl=mono`, '-t', estSeconds.toFixed(2), out])
-  return { engine: 'silent-guide', seconds: r.code === 0 ? await duration(out) : estSeconds, err: r.code ? tail(r.err) : undefined }
+  return { engine: 'silent-guide', seconds: r.code === 0 ? await duration(out) : estSeconds, err: r.code ? tail(r.err) : undefined, fallback: fell.join('; ') || undefined }
 }
 
 // ---------- sound effects ----------
@@ -193,8 +208,11 @@ export async function finalEdit(o: { cwd: string; segments: Segment[]; voice: st
 
 /** Integrated loudness (LUFS) of a file's audio, measured with FFmpeg's EBU R128 scanner. */
 export async function loudness(file: string): Promise<number | null> {
-  const r = await sh(FF(), ['-hide_banner', '-nostats', '-i', file, '-af', 'ebur128=framelog=quiet', '-f', 'null', '-'], { timeoutMs: 5 * 60_000 })
-  const m = [...r.err.matchAll(/I:\s+(-?[\d.]+) LUFS/g)].pop()
+  // Plain `ebur128` (no framelog=quiet: FFmpeg 5.1 in Debian bookworm rejects that value and then prints a bogus 0.0 summary).
+  // Read the integrated value from the final summary block only, and only when FFmpeg finished cleanly.
+  const r = await sh(FF(), ['-hide_banner', '-nostats', '-i', file, '-vn', '-af', 'ebur128', '-f', 'null', '-'], { timeoutMs: 5 * 60_000 })
+  if (r.code !== 0) return null
+  const m = [...r.err.matchAll(/Integrated loudness:\s*\n\s*I:\s+(-?[\d.]+) LUFS/g)].pop()
   return m ? Number(m[1]) : null
 }
 

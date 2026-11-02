@@ -44,6 +44,9 @@ try {
   const st = (await api('/api/shorts/status')).body
   ok(st.stages.join() === 'script,plan,voice,images,clips,sfx,edit,qa' && st.rules.length >= 18 && st.cast.some((c) => c.main), 'status: stages, 18 rules and a cast with a main character')
   ok(st.tools.ffmpeg === true, 'status: ffmpeg detected')
+  const piperExpected = !!(process.env.PIPER_MODEL && existsSync(process.env.PIPER_MODEL))
+  ok(st.tools.piper === piperExpected && st.tools.voice === (st.tools.piper ? 'piper' : st.tools.espeak ? 'espeak-ng' : 'silent-guide'), `status: voice engine reported (${st.tools.voice}${st.tools.piperVoice ? ', ' + st.tools.piperVoice : ''}), Piper preferred when installed`)
+  if (process.env.EXPECT_PIPER) ok(st.tools.piper === true && st.tools.voice === 'piper', 'status: piper present (EXPECT_PIPER)')
 
   // --- plan preview (no rendering): word-for-word, 12 shots, main character in most shots
   const pv = (await post('/api/shorts/plan', { story: STORY, title: 'The Pig War' })).body
@@ -91,6 +94,7 @@ try {
   await post(`/api/shorts/runs/${c.runId}/run`, { until: 'qa' }); run = await until(c.runId)
   console.log(`     render took ${((Date.now() - t0) / 1000).toFixed(1)}s, voice engine: ${run.voice?.engine}, status ${run.status}${run.error ? ' (' + run.error + ')' : ''}`)
   ok(['done', 'failed_qa'].includes(run.status) && run.stages.qa, 'render: ran through qa')
+  ok(run.voice.engine === st.tools.voice, `voice: rendered with the preferred engine (${run.voice.engine})`)
   ok(run.images[0].source === 'upload' && run.clips.length === 12 && run.sfx.length === 12, 'render: uploaded picture used, 12 clips, 12 sound effects')
   ok(run.cuts.every((cut, i) => i === 0 || Math.abs(cut.start - (cut.firstWord - 0.08)) < 0.01), 'edit: each cut lands just before the shot\'s first word')
   ok(run.qa.stats.drift <= 0.25, `qa: cut drift ${run.qa.stats.drift}s within rule E1`)
@@ -121,6 +125,15 @@ try {
   ok((await post(`/api/shorts/runs/${c.runId}/timings`, { words })).body.match.ok, 'timings: matching take accepted')
   await post(`/api/shorts/runs/${c.runId}/run`, { until: 'clips' }); run = await until(c.runId)
   ok(run.status === 'paused' && run.timingSource === 'upload' && Math.abs(run.cuts[1].firstWord - words.findIndex((w, i) => i > 0 && run.plan.shots[1].text.startsWith(w.w)) * 0.35) < 0.4, 'timings: uploaded word timings drive the cuts')
+
+  // --- a replaced voice take drops the old take's word timings (they would mis-time cuts and captions)
+  const newTake = spawnSync(process.env.FFMPEG_BIN || 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=f=220:d=30', '-ar', '22050', '-ac', '1', '-f', 'wav', '-'], { maxBuffer: 1e8 }).stdout
+  ok((await upload(`/api/shorts/runs/${c.runId}/assets/voice/0`, newTake, 'voice.wav', 'audio/wav')).body.ok, 'voice: new take uploaded')
+  await post(`/api/shorts/runs/${c.runId}/run`, { until: 'voice' }); run = await until(c.runId)
+  ok(run.voice.uploaded && run.timingSource === 'estimate' && Math.abs(run.voice.seconds - 30) < 0.5 && Math.abs(run.timings.at(-1).end - 30) < 2, `voice: replaced take uses fresh timings, not the old take's (${run.timingSource}, ${run.voice.seconds}s)`)
+  ok((await post(`/api/shorts/runs/${c.runId}/timings`, { words })).body.ok, 'timings: re-uploaded for the new take')
+  await post(`/api/shorts/runs/${c.runId}/run`, { until: 'voice' }); run = await until(c.runId)
+  ok(run.timingSource === 'upload' && run.stages.voice.status === 'done', 'timings: timings made from the new take are kept')
 
   // --- study a reference short (stage 0)
   const fs = await import('node:fs')

@@ -10,8 +10,12 @@ and captions are exact. Then resumes the run.
   python scripts/shorts-pc-worker.py sht_xxxxxxxxxxxx C:\\renders\\pigwar [--from images]
 
 Folder layout: shot-<n>.png, shot-<n>.mp4, sfx-<n>.wav, voice.wav (any subset).
+Every request times out after FRAYMUS_TIMEOUT seconds (default 120) and is retried up to 2 more times on network
+errors, so a stalled connection can't hang the worker.
 """
-import json, os, re, sys, urllib.request, uuid
+import json, os, re, socket, sys, time, urllib.error, urllib.request, uuid
+
+TIMEOUT = float(os.environ.get("FRAYMUS_TIMEOUT", "120"))
 
 def call(method, path, body=None, files=None):
     url = os.environ.get("FRAYMUS_URL", "https://fraymus-fly-io.fly.dev").rstrip("/") + path
@@ -24,8 +28,15 @@ def call(method, path, body=None, files=None):
         headers["Content-Type"] = f"multipart/form-data; boundary={b}"
     elif body is not None:
         data = json.dumps(body).encode(); headers["Content-Type"] = "application/json"
-    with urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers=headers)) as r:
-        return json.loads(r.read() or b"null")
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers=headers), timeout=TIMEOUT) as r:
+                return json.loads(r.read() or b"null")
+        except urllib.error.HTTPError as e:  # the server answered: report it, don't retry
+            raise SystemExit(f"{method} {path} -> HTTP {e.code}: {e.read()[:300].decode(errors='replace')}")
+        except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError) as e:
+            if attempt == 2: raise SystemExit(f"{method} {path} failed after 3 tries ({TIMEOUT:.0f}s timeout): {e}")
+            time.sleep(2 * (attempt + 1))
 
 def main():
     if len(sys.argv) < 3: print(__doc__); sys.exit(1)

@@ -16,7 +16,8 @@
     "test:gate": "node scripts/test-access-gate.mjs",
     "test:memory": "node scripts/test-memory.mjs",
     "test:library": "node scripts/test-library.mjs",
-    "test:shorts": "node scripts/test-shorts.mjs",
+    "test:shorts": "npx tsx scripts/test-voice.ts && node scripts/test-shorts.mjs",
+    "test:voice": "npx tsx scripts/test-voice.ts",
     "verify:record": "node scripts/verify-record.mjs",
     "clean": "node -e \"for (const d of ['dist','data-test']) require('fs').rmSync(d,{recursive:true,force:true})\""
   },

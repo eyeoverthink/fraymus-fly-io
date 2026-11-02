@@ -4,7 +4,7 @@
 // the next one starts, so a failure stops the run instead of wasting work downstream ("blocked" + issues).
 // GPU-only work (diffusion pictures, image-to-video, Whisper word timings) can run on the PC/Pi/VPS and be uploaded
 // per shot; when nothing is uploaded the CPU fallbacks below are used.
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import type { FastifyInstance } from 'fastify'
 import { db, now } from '../agent/db'
@@ -30,8 +30,9 @@ type Input = { title: string; story: string; shots: number; cast: CastMember[]; 
 type StageInfo = { status: 'done' | 'blocked' | 'error'; at: number; issues: string[]; libraryId?: string | null; seconds?: number }
 type State = {
   check?: Check; plan?: Plan; verify?: Check
-  voice?: { file: string; url: string; engine: string; seconds: number; uploaded?: boolean; heard?: string; match?: any }
+  voice?: { file: string; url: string; engine: string; seconds: number; uploaded?: boolean; heard?: string; match?: any; sha?: string }
   timings?: Word[]; timingSource?: string
+  timingsFor?: string // sha256 of the voice take the uploaded word timings were made from
   images?: { n: number; url: string; source: string; check: Check }[]
   clips?: { n: number; url: string; source: string; check: Check }[]
   sfx?: { n: number; tag: string; url: string }[]
@@ -80,6 +81,8 @@ function saveStage(run: Row, stage: Stage, text: string, data: any) {
     preview: text.slice(0, 300), body: text, tags: ['shorts', stage, run.id], meta: { runId: run.id, stage }, snapshot: { text, data } })
 }
 const uploaded = (id: string, kind: string, n: number | string, ext: string) => { const p = `${workDir(id)}/upload-${kind}-${n}.${ext}`; return existsSync(p) ? p : null }
+const fileSha = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex')
+const uploadedVoice = (id: string) => uploaded(id, 'voice', 0, 'wav') || uploaded(id, 'voice', 0, 'mp3')
 
 // ---------- stages ----------
 async function runStage(run: Row, input: Input, st: State, stage: Stage): Promise<{ issues: string[]; text: string; data: any }> {
@@ -99,27 +102,38 @@ async function runStage(run: Row, input: Input, st: State, stage: Stage): Promis
     }
     case 'voice': {
       need('plan', 'plan')
-      const issues: string[] = []
-      const up = uploaded(run.id, 'voice', 0, 'wav') || uploaded(run.id, 'voice', 0, 'mp3')
+      const issues: string[] = [], notes: string[] = []
+      const up = uploadedVoice(run.id)
       const wav = `${dir}/voice.wav`
-      let engine = 'upload', seconds = 0
-      if (up) { copyFileSync(up, wav.replace(/wav$/, up.split('.').pop()!)); seconds = await duration(up) }
-      const file = up ? wav.replace(/wav$/, up.split('.').pop()!) : wav
-      if (!up) { const v = await synthVoice(input.story, wav, st.plan!.estSeconds); engine = v.engine; seconds = v.seconds; if (v.err) issues.push('voice: ' + v.err) }
+      const hadTimings = st.timingSource === 'upload' && !!st.timings
+      // Uploaded word timings belong to one specific take. If they were made from the take we already have (and no new
+      // voice was uploaded), keep that take instead of re-synthesising, so the timings still line up with the audio.
+      const keep = !up && hadTimings && st.voice?.file && existsSync(st.voice.file) && st.timingsFor && fileSha(st.voice.file) === st.timingsFor
+      let engine = 'upload', seconds = 0, file = wav
+      if (keep) { file = st.voice!.file; engine = st.voice!.engine; seconds = await duration(file) }
+      else if (up) { file = wav.replace(/wav$/, up.split('.').pop()!); copyFileSync(up, file); seconds = await duration(up) }
+      else {
+        const v = await synthVoice(input.story, wav, st.plan!.estSeconds); engine = v.engine; seconds = v.seconds
+        if (v.err) issues.push('voice: ' + v.err)
+        if (v.fallback) notes.push(`voice fell back to ${v.engine}: ${v.fallback}`)
+      }
       if (!seconds) issues.push('voice track is empty')
-      if (engine === 'silent-guide') issues.push('no offline voice engine found (espeak-ng/piper): a silent guide track with estimated timings was used; upload a voice WAV to replace it')
-      const prev = st.timings && st.timingSource === 'upload' ? st.timings : null
+      if (engine === 'silent-guide') notes.push('no offline voice engine found (espeak-ng/piper): a silent guide track with estimated timings was used; upload a voice WAV to replace it')
+      const sha = existsSync(file) ? fileSha(file) : undefined
+      const prev = hadTimings && sha && st.timingsFor === sha ? st.timings! : null
+      if (hadTimings && !prev) notes.push('uploaded word timings were for a different voice take, so they were dropped; timings are estimated (re-run Whisper on this take for exact cuts)')
       st.timings = prev || estimateTimings(input.story, seconds || st.plan!.estSeconds)
       st.timingSource = prev ? 'upload' : 'estimate'
+      if (!prev) delete st.timingsFor
       let match: any
       if (prev) { // word timings from Whisper on the PC: the voice must say the script word for word
         const heard = prev.map((w) => w.w).join(' ')
         match = matchTranscript(input.story, heard)
         if (!match.ok) issues.push(`voice does not match the script word for word (${match.edits} edits, WER ${match.wer}); re-take it`)
       }
-      st.voice = { file, url: publish(run, file, `voice.${file.split('.').pop()}`, `${input.title} · voiceover`, 'voice', { engine }), engine, seconds: +seconds.toFixed(2), uploaded: !!up, match }
-      const blocking = issues.filter((i) => !i.startsWith('no offline voice'))
-      return { issues: blocking, text: `Voice: ${engine}, ${st.voice.seconds}s, timings from ${st.timingSource}${issues.length ? '\n- ' + issues.join('\n- ') : ''}`, data: { voice: st.voice, timings: st.timings, warnings: issues } }
+      st.voice = { file, url: publish(run, file, `voice.${file.split('.').pop()}`, `${input.title} · voiceover`, 'voice', { engine }), engine, seconds: +seconds.toFixed(2), uploaded: !!up || (!!keep && !!st.voice?.uploaded), match, sha }
+      const warnings = [...notes, ...issues]
+      return { issues, text: `Voice: ${engine}, ${st.voice.seconds}s, timings from ${st.timingSource}${warnings.length ? '\n- ' + warnings.join('\n- ') : ''}`, data: { voice: st.voice, timings: st.timings, warnings } }
     }
     case 'images': {
       need('plan', 'plan')
@@ -246,9 +260,10 @@ export const listRuns = (userId: string) => (db.prepare('select id,title,status,
   .map((r) => ({ id: r.id, title: r.title, status: r.status, stage: r.stage, error: r.error || undefined, createdAt: r.created_at, updatedAt: r.updated_at }))
 
 // Invalidate a stage and everything after it (e.g. after uploading a better picture or editing the plan).
-function invalidateFrom(id: string, stage: Stage) {
+function invalidateFrom(id: string, stage: Stage, opts: { dropTimings?: boolean } = {}) {
   const r = load(id)!; const st = parse(r.state, { stages: {} }) as State
   for (const s of STAGES.slice(STAGES.indexOf(stage))) delete st.stages[s]
+  if (opts.dropTimings && st.timingSource === 'upload') { delete st.timings; delete st.timingSource; delete st.timingsFor } // a new take needs new timings
   save(id, { state: st, status: r.status === 'running' ? r.status : 'paused' })
 }
 
@@ -341,7 +356,7 @@ export function registerShortsRoutes(app: FastifyInstance) {
     for (const x of ext) rmSync(`${workDir(r.id)}/upload-${kind}-${n}.${x}`, { force: true })
     writeFileSync(`${workDir(r.id)}/upload-${kind}-${n}.${e}`, buf)
     if (kind === 'image') { const input = parse(r.input, {}) as Input; const c = await checkPicture(`${workDir(r.id)}/upload-${kind}-${n}.${e}`, input.w, input.h).catch((x) => ({ ok: false, issues: [String(x.message)], stats: {} })); invalidateFrom(r.id, 'images'); return { ok: true, check: c } }
-    invalidateFrom(r.id, ({ clip: 'clips', voice: 'voice', sfx: 'sfx' } as Record<string, Stage>)[kind])
+    invalidateFrom(r.id, ({ clip: 'clips', voice: 'voice', sfx: 'sfx' } as Record<string, Stage>)[kind], { dropTimings: kind === 'voice' })
     return { ok: true, bytes: buf.length }
   })
   // Word timings from faster-whisper (word_timestamps=True) on the PC: [{w,start,end}]
@@ -351,7 +366,10 @@ export function registerShortsRoutes(app: FastifyInstance) {
     const words: Word[] = ws.map((w) => ({ w: String(w.w ?? w.word ?? '').trim(), start: Number(w.start), end: Number(w.end) })).filter((w) => w.w && Number.isFinite(w.start) && w.end >= w.start)
     if (!words.length) return fail(reply, 'words [{w,start,end}] required')
     const st = parse(r.state, { stages: {} }) as State; const input = parse(r.input, {}) as Input
-    st.timings = words; st.timingSource = 'upload'
+    // the timings are for the take the next voice stage will use: a pending upload, else the current voice file
+    const take = uploadedVoice(r.id) || (st.voice?.file && existsSync(st.voice.file) ? st.voice.file : null)
+    if (!take) return fail(reply, 'no voice take yet: run the voice stage or upload a voice first')
+    st.timings = words; st.timingSource = 'upload'; st.timingsFor = fileSha(take)
     for (const s of STAGES.slice(STAGES.indexOf('voice'))) delete st.stages[s]
     save(r.id, { state: st, status: 'paused' })
     return { ok: true, words: words.length, match: matchTranscript(input.story, words.map((w) => w.w).join(' ')) }

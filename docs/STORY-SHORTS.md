@@ -13,7 +13,7 @@ The original used paid cloud models (Opus, Nano Banana Pro, Wan, ElevenLabs); he
 | – | rules / cast | rulebook (18 rules) + cast bible | cast has a main character | JSON (`DEFAULT_RULES`, `DEFAULT_CAST`) | – |
 | 1 | script | narration → length / hook / "you" report | advisory only | `checkScript` | your own LLM, fact-checked |
 | 2 | plan   | narration → 12 shots (line, picture prompt, camera move, sound, cast) | narration word for word, opening + last line kept, main character in ≥60% of shots, ≤3 characters, valid moves | `buildPlan` + `verifyPlan` | – |
-| 3 | voice  | narration → voice track + word timings | uploaded Whisper timings must match the script word for word | Piper (if `PIPER_MODEL`) → espeak-ng → silent guide | Piper/any TTS + faster-whisper word timings, uploaded |
+| 3 | voice  | narration → voice track + word timings | uploaded Whisper timings must match the script word for word | Piper (if `PIPER_MODEL`) → espeak-ng → silent guide | VoiceStudio (your cloned / designed voice) or any TTS + word timings, uploaded by the PC worker |
 | 4 | images | prompt → one 9:16 picture per shot | 9:16, not a plain background, warm light | sharp storyboard frame | SD/Flux/ComfyUI on the GPU, uploaded per shot |
 | 5 | clips  | picture → clip as long as the shot | size, length, start→end drift (character stays itself) | ffmpeg zoompan camera move | Wan / LTX image-to-video, uploaded per shot |
 | 6 | sfx    | sound idea → low effect per shot | – | ffmpeg-synthesised effects (license-free) | your own SFX, uploaded |
@@ -46,8 +46,59 @@ Tip from the video, built in: run `until: "images"`, look at the pictures, uploa
 
 ## PC helper (optional, not run on Fly)
 
-`scripts/shorts-pc-worker.py` uploads a folder of GPU renders (`shot-1.png`, `shot-1.mp4`, `voice.wav`) to a run and,
-if `faster-whisper` is installed, sends word timings for `voice.wav`. See the script header.
+`scripts/shorts-pc-worker.py` (Python 3, standard library only) uploads a folder of GPU renders (`shot-1.png`,
+`shot-1.mp4`, `sfx-1.wav`, `voice.wav`) to a run and, if `faster-whisper` is installed, sends word timings for
+`voice.wav`. Then it resumes the run (`--from` / `--until` pass through). See the script header.
+
+```
+set FRAYMUS_URL=https://fraymus-fly-io.fly.dev
+set FRAYMUS_TOKEN_FILE=C:\Users\you\workspace-access-token.txt     (or FRAYMUS_TOKEN; never printed)
+python scripts\shorts-pc-worker.py sht_xxxxxxxxxxxx C:\renders\pigwar [--from images] [--until images]
+```
+
+### VoiceStudio voice (your own cloned voice, on the PC GPU)
+
+[VoiceStudio](https://github.com/debpalash/VoiceStudio) (free, local; v0.5.7 tested on an RTX 3070) runs its API at
+`http://127.0.0.1:3900`; local requests need no key. With `--voice voicestudio` the worker:
+
+1. reads the run's shot lines from Fly (plans the run first if it has no plan yet),
+2. voices each line with `POST /generate` (`text`, `profile_id`) using the chosen VoiceStudio profile,
+3. joins the lines into one `voice.wav` (0.15 s lead, 0.3 s between lines) and writes `voice-timings.json`,
+4. uploads `voice.wav` (`/assets/voice/0`) and the word timings (`/timings`), then resumes the run from `voice`.
+
+The server's voice stage then uses that take instead of Piper (`voice.engine = "upload"`, `timingSource = "upload"`),
+and still checks the timings word for word against the narration.
+
+```
+python scripts\shorts-pc-worker.py sht_xxxxxxxxxxxx C:\renders\pigwar --voice voicestudio
+python scripts\shorts-pc-worker.py sht_xxxxxxxxxxxx C:\renders\pigwar --voice voicestudio --cast-voices villain=overlord --shot-voices 7=overlord
+python scripts\shorts-pc-worker.py - C:\renders\test --voice voicestudio --dry-run --text "One line to try."   (no Fly calls)
+```
+
+| Setting (flag / env) | Default | Meaning |
+|---|---|---|
+| `--voice voicestudio` / `SHORTS_VOICE` | off | turn the VoiceStudio voice on |
+| `--voicestudio-url` / `VOICESTUDIO_URL` | `http://127.0.0.1:3900` | VoiceStudio backend |
+| `--profile` / `VOICESTUDIO_PROFILE` | `vaughn-one` | narrator voice (profile name or id from `GET /profiles`) |
+| `--cast-voices` / `VOICESTUDIO_CAST` | – | `cast=profile,...`; a shot whose cast (id, name or role) matches uses that voice |
+| `--shot-voices` / `VOICESTUDIO_SHOTS` | – | `shot=profile,...`; per-shot override |
+| `VOICESTUDIO_GAP` | `0.3` | seconds of pause between lines |
+| `VOICESTUDIO_MAX_WER` / `--accept-voice` | `0.25` | a line Whisper hears this differently from the script is re-taken once, then the upload stops (unless `--accept-voice`) |
+| `VOICESTUDIO_TIMEOUT` | `300` | seconds per line |
+
+Word timings, best first: VoiceStudio's own Whisper (`/v1/audio/transcriptions`, needs its speech-to-text model —
+download *Whisper large-v3* in VoiceStudio's Model Catalogue), local `faster-whisper` (`pip install faster-whisper`,
+`WHISPER_MODEL`), else an even split of each line's words inside the part of the line where there is sound. Because
+every line is voiced separately, each shot's first-word time (and so each cut) is exact even in the even-split case;
+only the word-by-word caption timing within a line is approximate. Whisper's words are mapped back onto the script's
+words, so number formatting ("12" for "twelve") doesn't fail the server's word-for-word check.
+
+**Fallback:** if VoiceStudio can't be reached, the profile doesn't exist, or a line fails, no voice is uploaded and
+the server voices the run with Piper as before (the other assets still upload).
+
+**Voices:** only use profiles that are your own voice, a designed (synthetic) voice, or a person who agreed to be
+cloned. Don't clone celebrities, actors or famous characters (e.g. a film villain's voice): design a similar-sounding
+original voice instead.
 
 ## Fly
 

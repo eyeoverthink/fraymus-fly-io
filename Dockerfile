@@ -5,7 +5,11 @@ WORKDIR /app
 # DejaVu = caption font. GPU stages (pictures, image-to-video, Whisper) run on the PC/Pi and upload per shot.
 # python3 (stdlib only, no pip packages) runs the vendored FRAYMUS Logic Chain (vendor/logic-chain) as a loopback sidecar
 # that server/logic-chain starts and supervises inside this same container.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak-ng fonts-dejavu-core python3 && rm -rf /var/lib/apt/lists/*
+# ca-certificates: python3's urllib (the Logic Chain's provider calls) uses the system CA store, and --no-install-recommends
+# leaves it out, so without it every live HTTPS call fails with SSL: CERTIFICATE_VERIFY_FAILED. (Node bundles its own CAs.)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak-ng fonts-dejavu-core python3 ca-certificates && rm -rf /var/lib/apt/lists/* \
+  && python3 -c "import ssl; c=ssl.create_default_context(); assert c.cert_store_stats()['x509_ca'] > 0, 'no CA certificates'"
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 # Piper (MIT, rhasspy/piper 2023.11.14-2 release: self-contained binary + onnxruntime + its own espeak-ng data) gives the
 # voice stage a natural neural narrator on CPU (~20x real time, ~100-200 MB RAM). espeak-ng above stays as the fallback.

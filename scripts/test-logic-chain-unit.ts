@@ -1,5 +1,5 @@
 // Unit checks for server/logic-chain config: provider-key resolution from env names only, seat/slot building,
-// spend caps, the MOCK/MIXED/LIVE label, the identity fallback, and the sidecar env allow-list. No network, no sidecar.
+// spend caps, the MOCK/MIXED/LIVE/FAILED label, the identity fallback, and the sidecar env allow-list. No network, no sidecar.
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -54,14 +54,26 @@ try {
   const leaked = Object.values(env).some((v) => ['ws-secret', 'shop-secret', 're-secret'].includes(v))
   ok(!leaked && env.FRAYMUS_HOST === '127.0.0.1' && env.FRAYMUS_PORT === '1234' && env.FRAYMUS_DATA_DIR === join(dir, 'logic-chain'), 'env: sidecar gets loopback host + its data dir, and no unrelated secret')
   ok(!('XAI_API_KEY' in lc.sidecarEnv(0, false)), 'env: the verify CLI runs without provider keys')
+  process.env.SSL_CERT_FILE = '/etc/ssl/certs/ca-certificates.crt'
+  ok(lc.sidecarEnv(1).SSL_CERT_FILE === '/etc/ssl/certs/ca-certificates.crt', 'env: SSL_CERT_FILE (CA bundle for HTTPS provider calls) reaches the sidecar')
+  delete process.env.SSL_CERT_FILE
   reset()
 
   // labels
   ok(lc.labelOf({ mode: 'mock', stages: [{ kind: 'demo' }] }) === 'MOCK', 'label: mock run -> MOCK')
   ok(lc.labelOf({ stages: [{ kind: 'demo' }, { kind: 'demo' }] }) === 'MOCK', 'label: all-demo stages -> MOCK even without a mode')
-  ok(lc.labelOf({ mode: 'mixed', stages: [{ kind: 'demo' }, { kind: 'gemini' }] }) === 'MIXED (part MOCK)', 'label: mixed -> MIXED (part MOCK)')
-  ok(lc.labelOf({ mode: 'real', stages: [{ kind: 'demo' }, { kind: 'gemini' }] }) === 'MIXED (part MOCK)', 'label: any demo stage can never be LIVE')
-  ok(lc.labelOf({ mode: 'real', stages: [{ kind: 'gemini' }, { kind: 'openai' }] }) === 'LIVE', 'label: all real providers -> LIVE')
+  const C = 'complete', F = 'failed'
+  ok(lc.labelOf({ mode: 'mixed', stages: [{ kind: 'demo', status: C }, { kind: 'gemini', status: C }] }) === 'MIXED (part MOCK)', 'label: mixed -> MIXED (part MOCK)')
+  ok(lc.labelOf({ mode: 'real', stages: [{ kind: 'demo', status: C }, { kind: 'gemini', status: C }] }) === 'MIXED (part MOCK)', 'label: any demo stage can never be LIVE')
+  ok(lc.labelOf({ mode: 'real', status: 'complete', stages: [{ kind: 'gemini', status: C }, { kind: 'openai', status: C }] }) === 'LIVE', 'label: all real providers completed -> LIVE')
+  ok(lc.labelOf({ mode: 'real', status: 'partial_failure', stages: [{ kind: 'gemini', status: F }, { kind: 'openai', status: C }] }) === 'LIVE', 'label: some real stages completed, some failed -> still LIVE (status says partial_failure)')
+  // Regression (Fly v12): every provider call failed with CERTIFICATE_VERIFY_FAILED, and the run was shown as LIVE.
+  const sslFail = { mode: 'real', status: 'failed', stages: Array.from({ length: 16 }, (_, i) => ({ number: i + 1, kind: i % 2 ? 'openai_compatible' : 'openai', status: F, error: 'URLError: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED]>' })) }
+  ok(lc.labelOf(sslFail, 'live') === 'FAILED', 'label: live run where every stage failed -> FAILED, never LIVE')
+  ok(lc.labelOf({ mode: 'real', status: 'failed', stages: [] }, 'live') === 'FAILED' && lc.labelOf({ mode: 'none', status: 'budget_exceeded', stages: [] }, 'live') === 'FAILED', 'label: finished live run with zero stages -> FAILED')
+  ok(lc.labelOf({ mode: 'real', status: 'cancelled', stages: [{ kind: 'gemini', status: 'cancelled' }] }, 'live') === 'FAILED', 'label: stopped live run with zero completed stages -> FAILED')
+  ok(lc.labelOf({ mode: 'real', status: 'running', stages: [{ kind: 'gemini', status: F }, { kind: 'openai', status: 'running' }] }, 'live') === 'PENDING', 'label: running live run with no completed stage yet -> PENDING, not LIVE')
+  ok(lc.labelOf({ mode: 'mock', status: 'failed', stages: [{ kind: 'demo', status: F }] }, 'mock') === 'MOCK', 'label: a failed mock run stays MOCK')
   ok(lc.labelOf({}, 'mock') === 'MOCK' && lc.labelOf({}, 'live') === 'PENDING', 'label: before stages -> MOCK or PENDING, never LIVE')
 
   // identity

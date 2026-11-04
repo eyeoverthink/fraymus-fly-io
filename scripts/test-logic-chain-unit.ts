@@ -76,6 +76,31 @@ try {
   ok(lc.labelOf({ mode: 'mock', status: 'failed', stages: [{ kind: 'demo', status: F }] }, 'mock') === 'MOCK', 'label: a failed mock run stays MOCK')
   ok(lc.labelOf({}, 'mock') === 'MOCK' && lc.labelOf({}, 'live') === 'PENDING', 'label: before stages -> MOCK or PENDING, never LIVE')
 
+  // stored-label migration: the run list reads logic_runs.label, so stale labels written before FAILED existed get rewritten
+  const { db } = await import('../server/agent/db.ts')
+  const ins = db.prepare("insert into logic_runs(id,user_id,objective,requested_mode,mode,label,status,caps,created_at,updated_at) values(?,?,?,?,?,?,?,'{}',?,?)")
+  ins.run('stale-failed', 'u1', 'x', 'live', 'real', 'LIVE', 'failed', 1, 1)
+  ins.run('good-live', 'u1', 'x', 'live', 'real', 'LIVE', 'complete', 2, 2)
+  ins.run('good-mock', 'u1', 'x', 'mock', 'mock', 'MOCK', 'complete', 3, 3)
+  ins.run('gone', 'u1', 'x', 'live', 'real', 'LIVE', 'failed', 4, 4)
+  ins.run('running', 'u1', 'x', 'live', null, 'PENDING', 'running', 5, 5)
+  db.prepare("insert into logic_skills(id,run_id,user_id,title,mode,label,manifest,created_at) values('sk','stale-failed','u1','t','real','LIVE','{}',1)").run()
+  const fixtures: Record<string, any> = {
+    'stale-failed': { id: 'stale-failed', ...sslFail },
+    'good-live': { id: 'good-live', mode: 'real', status: 'complete', stages: [{ kind: 'openai', status: C }] },
+    'good-mock': { id: 'good-mock', mode: 'mock', status: 'complete', stages: [{ kind: 'demo', status: C }] },
+    running: { id: 'running', mode: 'real', status: 'running', stages: [] }
+  }
+  const asked: string[] = []
+  const changed = await lc.relabelStoredRuns(async (id: string) => { asked.push(id); return fixtures[id] || null })
+  const byId = Object.fromEntries(lc.listRuns('u1').map((r: any) => [r.id, r.label]))
+  ok(changed.length === 1 && changed[0].id === 'stale-failed' && changed[0].from === 'LIVE' && changed[0].to === 'FAILED', 'relabel: only the stale all-failed live run changes, LIVE -> FAILED')
+  ok(byId['stale-failed'] === 'FAILED' && byId['good-live'] === 'LIVE' && byId['good-mock'] === 'MOCK', 'relabel: run list now shows FAILED / LIVE / MOCK like the single-run view')
+  ok(byId['gone'] === 'LIVE', 'relabel: a run the sidecar no longer has is left untouched')
+  ok(!asked.includes('running') && byId['running'] === 'PENDING', 'relabel: in-flight runs are skipped (the poller owns them)')
+  ok((db.prepare("select label from logic_skills where id='sk'").get() as any).label === 'FAILED', 'relabel: the run\'s skill row label follows')
+  ok((await lc.relabelStoredRuns(async (id: string) => fixtures[id] || null)).length === 0, 'relabel: idempotent, a second pass changes nothing')
+
   // identity
   ok(lc.resolveIdentity().source === 'local' && /LOCAL KEY/.test(lc.resolveIdentity().label), 'identity: none set -> labelled LOCAL KEY')
   process.env.FRAYMUS_IDENTITY_FILE = join(dir, 'missing.seed')

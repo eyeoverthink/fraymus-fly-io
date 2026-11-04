@@ -76,6 +76,7 @@ try {
   ok(done?.brief && done.links?.verify === `/api/logic-chain/runs/${id}/verify`, 'runs: brief and links present')
   const list = (await api('/api/logic-chain/runs')).body
   ok(Array.isArray(list?.runs) && list.runs.some((r) => r.id === id), 'runs: listed')
+  ok(list.runs.find((r) => r.id === id)?.label === done.label, 'runs: the list label matches the single-run view label')
   const full = (await api(`/api/logic-chain/runs/${id}?full=1`)).body
   ok(full?.run?.audit?.records?.length >= 18 && full.run.audit.records.every((x) => x.sig && x.link), `runs: ?full=1 returns run.json with ${full?.run?.audit?.records?.length} signed records`)
   ok((await api('/api/logic-chain/runs/nope')).status === 404, 'runs: unknown id 404')

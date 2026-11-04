@@ -1,11 +1,16 @@
+# Run the whole app without Fly.io: `cp .env.example .env` (fill what you need), then `docker compose up -d --build`.
+# Same image as Fly (Dockerfile): Node 24, ffmpeg, espeak-ng, Piper + the public-domain ljspeech voice, built UI.
+# Data (SQLite DBs, outputs, Library, shorts runs) lives in the named volume below, mounted at /data like Fly's volume.
 services:
   nodular:
     build:
       context: .
       args:
         VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-}
+    image: fraymus-app:local
     ports:
-      - "3001:3001"
+      # HOST_BIND=127.0.0.1 keeps it off the network (put a reverse proxy / Tailscale in front on a VPS)
+      - "${HOST_BIND:-0.0.0.0}:${HOST_PORT:-3001}:3001"
     env_file:
       - path: .env
         required: false

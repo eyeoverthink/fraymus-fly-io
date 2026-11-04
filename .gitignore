@@ -5,3 +5,8 @@ dist
 data
 data-test
 *.err
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.tsbuildinfo

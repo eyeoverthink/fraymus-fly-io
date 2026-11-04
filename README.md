@@ -1,61 +1,68 @@
-> **Fly.io:** this repo deploys as Fly app `fraymus-fly-io` from the repo root. See [FLY.md](FLY.md) for the secrets to set.
+# FRAYMUS / Nodular Workspace
 
+One self-contained app (Fastify API + React UI + SQLite) that you can run **on Fly.io, on your own VPS, or on any PC with Docker or Node**. Nothing in the code needs Fly: Fly is just one place it runs.
 
-# NODULAR WORKSPACE - FULL IMPLEMENTATION (No Stubs)
+What is in it:
 
-5-node chain: Llama Groq (brain) â†’ FLUX schnell (image) â†’ BiRefNet Remover â†’ Real-ESRGAN Upscaler â†’ HTML Preview + Deploy API
+- **Nodular workflow canvas**: chain LLM prompt -> FLUX image -> background remover -> upscaler -> preview, and deploy a workflow as an API (`POST /api/workflows/:id/run`). Works with no keys (mocks + local sharp).
+- **Shopify credit fulfillment + buyer page** (`/enhance`): Shopify order webhook adds credits, buyers sign in with an emailed one-time code (Resend) and run the paid pipeline.
+- **Agents** (`agents/*.md`) with tools, approvals, memory, an MCP server/hub and a cron scheduler.
+- **Library**: every image, clip, chat, memory and pipeline stage is saved and browsable (`/api/library`, Library tab, export).
+- **Story Shorts**: an offline pipeline that turns a narration into a vertical cartoon short (FFmpeg + sharp + Piper voice), with an optional PC worker that adds GPU pictures/clips and your own **VoiceStudio** voice.
 
-Rebuild of $4M Enhancor Workflows video using 100% FREE 2026 stack.
+## Run it
 
-## Quick Start
+### A. Docker (recommended, same image as Fly)
 
-npm i --legacy-peer-deps`ncp .env.example .env
-# Add free keys (optional - works without with mocks + sharp local)
-# GROQ_API_KEY from https://console.groq.com
-# HF_TOKEN from https://huggingface.co/settings/tokens
-npm run dev:all
+    cp .env.example .env        # fill in only what you need; everything is optional
+    docker compose up -d --build
+    curl http://localhost:3001/health
 
-Canvas: http://localhost:5173
-Server: http://localhost:3001
+The image includes ffmpeg, espeak-ng, Piper and the public-domain `en_US-ljspeech-medium` voice. Data (SQLite DBs, outputs, Library, shorts runs) is kept in the `nodular-data` volume at `/data`. On a VPS set `HOST_BIND=127.0.0.1` in `.env` and put a reverse proxy (Caddy/nginx) or Tailscale in front, or change `HOST_PORT`.
 
-## What Was Added (Full, No Stubs)
+### B. Node directly
 
-- BackgroundRemoverNode.tsx - indigo border, BiRefNet free WASM, shows transparent checkerboard preview
-- UpscalerNode.tsx - green border, Sharp 4x lanczos3, shows 4K output
-- executor.ts - full DAG topological sort, handles image blobs, error handling, progress callbacks
-- server/index.ts - 6 full routes, no TODOs, sharp for upscaler, HF proxies for FLUX/RMBG, Socket.io REA
-- AGENT_INSTRUCTIONS.md - briefing for Codex/Devin dumb agent
+Prerequisites: Node 22.5+ (24 recommended, uses built-in `node:sqlite`), npm, and for Story Shorts `ffmpeg` + `espeak-ng` on PATH. Optional: Piper (`PIPER_BIN`, `PIPER_MODEL` = a `.onnx` with its `.onnx.json`) for the natural voice; without it the voice stage uses espeak-ng.
 
-## Free Keys
+    npm install --legacy-peer-deps
+    cp .env.example .env
+    npm start                   # builds the UI, then serves UI + API on http://localhost:3001
 
-All free tier, no credit card:
-- Groq: https://console.groq.com - Llama 3.3 70B 14k tok/s
-- HuggingFace: https://huggingface.co/settings/tokens - FLUX schnell + RMBG-1.4
+Development with hot reload: `npm run dev:all` (UI :5173, API :3001). Data goes to `DATA_DIR` (default `./data`).
 
-Without keys, app still works: Groq returns mock enhanced prompt, FLUX returns SVG placeholder, remover/upscaler use sharp local.
+### C. Fly.io (the live app `fraymus-fly-io`)
 
-## Deploy as Product
+`fly.toml` + `Dockerfile` in the repo root; one 2 GB machine, volume `nodular_data` at `/data`. Secrets are set with `fly secrets set` and never committed. See [FLY.md](FLY.md) and [DEPLOY.md](DEPLOY.md).
 
-Click Deploy API â†’ returns POST /api/workflows/:id/run
-Curl: curl -X POST http://localhost:3001/api/workflows/ugc-mirror-selfie-v1/run -d '{"prompt":"mirror selfie"}'
+### Sign-in
 
-This endpoint is your product. Charge per call. System prompt chain is moat.
+`/api/*` fails closed. Either set `CLERK_SECRET_KEY` (+ `VITE_CLERK_PUBLISHABLE_KEY` at build time) for Clerk, or set `WORKSPACE_ACCESS_TOKEN` and sign in once at `/login` (or send `Authorization: Bearer <token>`). `WORKSPACE_AUTH=off` is for local dev only.
 
-## For Codex/Devin
+## Configuration
 
-Read AGENT_INSTRUCTIONS.md - explains what was built, file map, expectations, acceptance criteria. Implement true BiRefNet WASM via @imgly/background-removal-node and true Real-ESRGAN via replicate, add Supabase persistence, auth, billing.
+All settings are environment variables; [.env.example](.env.example) lists every one with a comment (names only, no values). The main groups:
 
-## Video Concept
+| Group | Variables |
+|---|---|
+| Server | `PORT` (3001), `HOST` (0.0.0.0), `DATA_DIR` (`./data`, `/data` in Docker/Fly), `PUBLIC_URL`, `CORS_ORIGIN`; compose: `HOST_PORT`, `HOST_BIND` |
+| Auth | `CLERK_SECRET_KEY`, `VITE_CLERK_PUBLISHABLE_KEY`, `WORKSPACE_ACCESS_TOKEN`, `WORKSPACE_AUTH`, `OWNER_USER_IDS`, `MCP_ADMIN_TOKEN` |
+| LLMs | `LLM_PROVIDERS`, `OLLAMA_*`, `GROQ_*`, `OPENAI_BASE_URL/API_KEY/MODEL`, `PROMPT_LLM*`, `EMBED_*` |
+| Images | `HF_TOKEN`, `HF_FLUX_*`, `REPLICATE_API_TOKEN`, `REQUIRE_AI_UPSCALE` |
+| Shopify / buyers | `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_PACK_PRODUCT_ID`, `SHOPIFY_CREDITS_PER_PACK`, `RESEND_API_KEY`, `MAIL_FROM`, `BUYER_PIPELINE_STRICT`, `FREE_CREDITS` |
+| Billing | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_METER_EVENT_NAME` |
+| Story Shorts | `PIPER_BIN`, `PIPER_MODEL`, `PIPER_LENGTH_SCALE`, `PIPER_SENTENCE_SILENCE`, `ESPEAK_*`, `FFMPEG_BIN`, `FFPROBE_BIN`, `SHORTS_MAX_CONCURRENT`, `SHORTS_FFMPEG_THREADS` |
+| Media/MCP | `VOICESTUDIO_MCP_URL`, `PHOTOCRAFT_CLI`, `REA_MCP`, `MCP_SERVERS_FILE`, `ALLOW_STDIO_IMPORT`, `AGENTS_DIR`, `SCHEDULER` |
 
-Wrapper dies, workflow is IP. System prompt chain is moat, not model. This repo implements that with free models.
+Optional Supabase store instead of SQLite: `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` (Shopify credits need SQLite).
 
+## Health and tests
 
-## Status
+- `GET /health` -> `{ ok, store, workspaceAuth, clerk, accessToken }`; `GET /api/shorts/status` shows which media tools were found (ffmpeg, espeak, piper).
+- `npm test` boots a throwaway server and runs the e2e suites; `npm run test:shorts`, `npm run test:library`, `npm run test:shopify`, etc. `make help` lists shortcuts.
 
-See DEPLOY.md for Docker/Fly/Railway and env vars (.env.example).
-Verified: server pipeline, deploy + API-key runs, SQLite persistence, credits, local background removal, UI build.
-Written but untested without your accounts: Supabase store, Clerk auth, Stripe metering/checkout (no webhook), Replicate Real-ESRGAN (sharp lanczos3 is used otherwise), Docker build.
+## Library
 
+Everything the app makes is saved as a Library item (types: image, media, chat, evolve, fossil, pattern, memory, akashic, canvas, buyer, pipeline) with tags, thumbnails and files: `GET /api/library`, `/api/library/items/:id[/file|/thumb]`, `/api/library/export`. Story Shorts stages show up as `pipeline` items.
 
 ## Agents
 
@@ -99,4 +106,23 @@ Everything Base44 did for agents now runs here, free and self-hosted. Other agen
 Cron-scheduled (5-field, **UTC**) agent runs or tool calls, replacing Base44 scheduled automations. Manage via `/api/automations` or the MCP tools `list_automations`, `upsert_automation` (admin), `run_automation`, `automation_runs`, `delete_automation`. Templates (`daily-report`, `six-hour-research`, `heartbeat`) install disabled. Unattended agent runs never auto-approve risky tools; they end as `awaiting_approval`. Tool automations call the tool directly (admin-created only). Set `SCHEDULER=off` to disable the ticker. Not ported: LinkedIn, Google Calendar and Base44-entity triggers (no native equivalent), and data-change triggers (use `POST /api/automations/:id/trigger` from a webhook).
 
 ## Story Shorts (offline pipeline)
-Vertical cartoon story shorts from a narration, made from free offline tools only (FFmpeg, sharp, espeak-ng/Piper): plan → voice → pictures → clips → sound → captions/edit → QA. Each stage is checked before the next and saved to the Library (`pipeline`). GPU renders from the PC can replace any shot. See [docs/STORY-SHORTS.md](docs/STORY-SHORTS.md); test: `npm run test:shorts`.
+
+Vertical cartoon story shorts from a narration, made from free offline tools only: plan -> voice -> pictures -> clips -> sound -> captions/edit -> QA. Each stage is checked before the next and saved to the Library (`pipeline`). Full stage table and API: [docs/STORY-SHORTS.md](docs/STORY-SHORTS.md).
+
+- **Voice**: Piper `en_US-ljspeech-medium` (MIT engine, public-domain training data, OK for commercial use) -> espeak-ng -> silent guide. Swap voices with `PIPER_MODEL`.
+- **API**: `/api/shorts/status`, `/api/shorts/plan`, `/api/shorts/runs` (create/list), `/api/shorts/runs/:id/run`, asset uploads `/api/shorts/runs/:id/assets/:kind/:n`, `/api/shorts/runs/:id/timings`, `/api/shorts/study`.
+- **Agent tools**: `shorts_plan` (check a narration and plan shots) and `shorts_make` (create and run a short).
+- Test: `npm run test:shorts`.
+
+### PC worker + VoiceStudio (your own voice)
+
+`scripts/shorts-pc-worker.py` (Python 3, stdlib only; `faster-whisper` optional) runs on your PC, never on the server. It uploads GPU renders (`shot-<n>.png`, `shot-<n>.mp4`, `sfx-<n>.wav`, `voice.wav`) to a run and resumes it. Point it at any install of this app:
+
+    set FRAYMUS_URL=http://localhost:3001          (or https://fraymus-fly-io.fly.dev, or your VPS)
+    set FRAYMUS_TOKEN_FILE=C:\path\token.txt       (file holding the workspace token; never printed)
+    python scripts\shorts-pc-worker.py sht_xxxxxxxxxxxx C:\renders\myshort --voice voicestudio --profile vaughn-one --cast-voices villain=overlord
+
+With `--voice voicestudio` it voices each shot line through [VoiceStudio](https://github.com/debpalash/VoiceStudio) (AGPL, local GPU app, API at `VOICESTUDIO_URL`, default `http://127.0.0.1:3900`), builds word timings (VoiceStudio Whisper, else faster-whisper, else an even split per line), and uploads both so the server uses that take instead of Piper. If VoiceStudio is not reachable it uploads nothing and the server falls back to Piper. `--dry-run --text "..."` tries a voice without sending anything.
+
+**Voices: only clone your own voice, use a designed (synthetic) voice, or a person who agreed to be cloned. Never a celebrity's or an actor's voice.**
+

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FRAYMUS Logic Chain</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="rail" id="rail" aria-label="Runs">
+    <div class="brand"><img src="/favicon.svg" alt="" width="26" height="26"><div><strong>FRAYMUS</strong><span>Logic Chain</span></div></div>
+    <button class="ghost wide" id="newRun">New run<kbd>N</kbd></button>
+    <div class="label rail-label">Runs</div>
+    <nav class="run-list" id="runList"></nav>
+    <div class="rail-foot">
+      <button class="ghost wide" id="openProviders">Providers</button>
+      <button class="ghost wide" id="openBenchmark">Benchmark</button>
+      <button class="ghost wide" id="openQuality">Quality</button>
+      <button class="ghost wide" id="openPalette">Commands<kbd>⌘K</kbd></button>
+    </div>
+  </aside>
+
+  <main class="canvas">
+    <div class="pane">
+      <div class="mobile-bar">
+        <button class="ghost" id="toggleRail">Runs</button>
+        <button class="ghost" id="toggleLive">Inspector</button>
+      </div>
+
+      <section class="composer" aria-label="Objective">
+        <div class="section-head">
+          <label class="label" for="request">Objective</label>
+          <span class="mode-chip" id="modeChip"></span>
+        </div>
+        <textarea id="request" rows="3" spellcheck="true" placeholder="What should the chain work through? Describe the system, the constraints and what a good result looks like."></textarea>
+        <div class="suggestions" id="suggestions"></div>
+        <div class="notice" id="notice" hidden></div>
+        <label class="consent" id="consent" hidden><input type="checkbox" id="approveRemote"><span id="consentText"></span></label>
+        <div class="composer-foot">
+          <span class="count" id="charCount">0 / 12,000</span>
+          <div class="actions">
+            <button class="ghost" id="cancelRun" hidden>Cancel run</button>
+            <button class="ghost" id="resumeRun" hidden>Resume run</button>
+            <button class="primary" id="runChain">Run chain<kbd>⌘↵</kbd></button>
+          </div>
+        </div>
+      </section>
+
+      <section class="chain" aria-label="Chain progress">
+        <div class="headline" aria-live="polite">
+          <strong id="headline">Ready</strong>
+          <span id="subline">Eight roles review your objective, then review each other.</span>
+        </div>
+        <div class="progress"><span id="progressBar"></span></div>
+        <div class="pass-label label">Pass 1 · Extract</div>
+        <div class="nodes" id="pass1"></div>
+        <div class="pass-label label">Pass 2 · Refine</div>
+        <div class="nodes" id="pass2"></div>
+        <button class="brief-node" id="briefNode" data-status="idle"><span class="label">Brief</span><span id="briefNodeText">Written after the final stage</span></button>
+      </section>
+
+      <section class="results" aria-label="Results">
+        <div class="tabs" role="tablist">
+          <button role="tab" id="tabBrief" aria-selected="true">Brief</button>
+          <button role="tab" id="tabDecisions" aria-selected="false">Decisions <span id="decisionCount" class="tab-count">0</span></button>
+          <button role="tab" id="tabLedger" aria-selected="false">Ledger <span id="ledgerCount" class="tab-count">0</span></button>
+          <button role="tab" id="tabUsage" aria-selected="false">Usage</button>
+          <div class="tab-actions">
+            <button class="ghost small" id="copyDoc" disabled>Copy</button>
+            <button class="ghost small" id="downloadDoc" disabled>Download .md</button>
+            <button class="ghost small" id="exportSkill" disabled>Export skill</button>
+            <button class="ghost small" id="verifyRun" disabled>Verify</button>
+          </div>
+        </div>
+        <div id="briefPanel" class="tab-panel"></div>
+        <div id="decisionsPanel" class="tab-panel" hidden></div>
+        <div id="usagePanel" class="tab-panel" hidden></div>
+        <div id="ledgerPanel" class="tab-panel" hidden>
+          <div class="ledger-tools">
+            <input id="ledgerSearch" type="search" placeholder="Search the ledger" aria-label="Search the ledger">
+            <div class="filters" id="ledgerFilters"></div>
+          </div>
+          <div id="ledgerBody"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <aside class="live" id="live" aria-label="Stage inspector">
+    <div class="live-head">
+      <span class="label" id="liveTitle">Roster</span>
+      <button class="ghost small" id="liveReset" hidden>Follow live</button>
+    </div>
+    <div class="live-body" id="liveBody"></div>
+  </aside>
+
+  <footer class="statusbar">
+    <span>CLK <b id="sbClock">00:00</b></span>
+    <span>STAGES <b id="sbStages">0/16</b></span>
+    <span>LEDGER <b id="sbLedger">0</b></span>
+    <span>FAILED <b id="sbFailed">0</b></span>
+    <span class="sb-wide">RUN <b id="sbRun">none</b></span>
+    <span class="sb-end">MODE <b id="sbMode">…</b></span>
+  </footer>
+</div>
+
+<dialog id="providers" class="sheet" aria-label="Providers">
+  <form method="dialog" id="providersForm">
+    <header class="sheet-head">
+      <div><strong>Providers</strong><span>Eight slots, run in order, twice. Your models, your order.</span></div>
+      <button type="button" class="ghost small" id="useRecommended">Use recommended mix</button>
+    </header>
+    <div class="sheet-body">
+      <datalist id="ollamaModels"></datalist>
+      <div class="label sheet-label first">Connections</div>
+      <div class="connections" id="connections"></div>
+      <div class="label sheet-label">Slots</div>
+      <div id="slotRows" class="slot-rows"></div>
+      <div class="label sheet-label">Run limits</div>
+      <div class="limits" id="limitFields"></div>
+      <label class="toggle"><input type="checkbox" id="review"><span>Have up to five independent providers vote on warnings, then group what is left (up to six extra calls)</span></label>
+      <label class="toggle"><input type="checkbox" id="synthesize"><span>Write a final brief after stage 16 (one extra model call)</span></label>
+      <label class="toggle"><input type="checkbox" id="allowRemote"><span>Allow providers outside this machine. Each run still needs your approval.</span></label>
+      <p class="form-error" id="providersError" hidden></p>
+    </div>
+    <footer class="sheet-foot">
+      <button type="button" class="ghost" id="closeProviders">Close</button>
+      <button type="button" class="primary" id="saveProviders">Save providers</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog id="benchmark" class="sheet" aria-label="Benchmark">
+  <form method="dialog">
+    <header class="sheet-head">
+      <div><strong>Benchmark</strong><span>Warnings with known answers, sent through the real review prompt.</span></div>
+    </header>
+    <div class="sheet-body" id="benchmarkBody"></div>
+    <footer class="sheet-foot">
+      <label class="consent bench-consent" id="benchConsent" hidden><input type="checkbox" id="benchApprove"><span id="benchConsentText"></span></label>
+      <button type="button" class="ghost" id="closeBenchmark">Close</button>
+      <button type="button" class="ghost" id="cancelBenchmark" hidden>Cancel</button>
+      <button type="button" class="primary" id="runBenchmark">Run benchmark</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog id="quality" class="sheet" aria-label="Quality">
+  <form method="dialog">
+    <header class="sheet-head">
+      <div><strong>Quality</strong><span>Your newest saved runs, checked against fixed checklists by tested judges.</span></div>
+    </header>
+    <div class="sheet-body" id="qualityBody"></div>
+    <footer class="sheet-foot">
+      <label class="consent bench-consent" id="qualityConsent" hidden><input type="checkbox" id="qualityApprove"><span id="qualityConsentText"></span></label>
+      <button type="button" class="ghost" id="closeQuality">Close</button>
+      <button type="button" class="ghost" id="cancelQuality" hidden>Cancel</button>
+      <button type="button" class="primary" id="runQuality">Run quality test</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog id="palette" class="palette" aria-label="Command palette">
+  <input id="paletteInput" type="text" placeholder="Type a command or find a run" aria-label="Command" autocomplete="off">
+  <div id="paletteList" class="palette-list" role="listbox"></div>
+</dialog>
+
+<dialog id="confirm" class="mini">
+  <p id="confirmText"></p>
+  <div class="actions">
+    <button class="ghost" id="confirmNo">Keep it</button>
+    <button class="danger" id="confirmYes">Delete</button>
+  </div>
+</dialog>
+
+<dialog id="tokenDialog" class="mini">
+  <p>This server requires an access token.</p>
+  <input id="tokenInput" type="password" aria-label="Access token" autocomplete="off">
+  <div class="actions">
+    <button class="primary" id="tokenSave">Continue</button>
+  </div>
+</dialog>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<script src="/app.js" defer></script>
+</body>
+</html>

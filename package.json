@@ -20,6 +20,7 @@
     "test:library": "node scripts/test-library.mjs",
     "test:shorts": "npx tsx scripts/test-voice.ts && node scripts/test-shorts.mjs",
     "test:voice": "npx tsx scripts/test-voice.ts",
+    "test:logic-chain": "cd vendor/logic-chain && python3 -m unittest discover -s tests -q && cd ../.. && npx tsx scripts/test-logic-chain-unit.ts && node scripts/test-logic-chain.mjs",
     "verify:record": "node scripts/verify-record.mjs",
     "clean": "node -e \"for (const d of ['dist','data-test']) require('fs').rmSync(d,{recursive:true,force:true})\""
   },

@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+runs/*.json
+runs/*.tmp
+skills/*.json
+skills/*/
+identity/
+benchmarks/
+config/providers.json
+.claude/
+.DS_Store
+quality/

@@ -1,5 +1,6 @@
 // Library: one index of everything created in the app (images/media, chats, evolve jobs, fossils,
-// proven patterns, memories, AkashicRecord entries, canvas workflows/runs, buyer outputs, story-shorts pipeline stages).
+// proven patterns, memories, AkashicRecord entries, canvas workflows/runs, buyer outputs, story-shorts pipeline stages,
+// Logic Chain briefs / signed run.json / skill packages).
 // The index lives in agent.db (lib_items + lib_fts). Media stays in DATA_DIR/outputs; text items are
 // snapshotted to DATA_DIR/library/<type>/<id>.json so they survive deletion of their source.
 // Nothing here is auto-purged except items owned by anonymous visitors (follows the visitor retention rules).
@@ -13,7 +14,7 @@ import { zipStream, type ZipEntry } from './zip'
 
 const DATA = () => process.env.DATA_DIR || './data'
 const abs = (rel: string) => `${DATA()}/${rel}`
-export const LIB_TYPES = ['image', 'media', 'chat', 'evolve', 'fossil', 'pattern', 'memory', 'akashic', 'canvas', 'buyer', 'pipeline'] as const
+export const LIB_TYPES = ['image', 'media', 'chat', 'evolve', 'fossil', 'pattern', 'memory', 'akashic', 'canvas', 'buyer', 'pipeline', 'logic'] as const
 export type LibType = typeof LIB_TYPES[number]
 const OWNER = 'local'
 export const isOwner = (uid: string) => uid === OWNER || (process.env.OWNER_USER_IDS || '').split(',').map((s) => s.trim()).filter(Boolean).includes(uid)
@@ -30,7 +31,7 @@ create table if not exists lib_kv(k text primary key, v text);
 try { db.exec(`create virtual table if not exists lib_fts using fts5(id unindexed, title, body, tags, tokenize='porter unicode61')`) } catch (e: any) { console.error('[library] fts unavailable:', e.message) }
 
 const kv = { get: (k: string) => (db.prepare('select v from lib_kv where k=?').get(k) as any)?.v as string | undefined, set: (k: string, v: any) => db.prepare('insert into lib_kv(k,v) values(?,?) on conflict(k) do update set v=excluded.v').run(k, String(v)) }
-const itemId = (type: string, sourceId: string) => 'lib_' + createHash('sha256').update(`${type}:${sourceId}`).digest('hex').slice(0, 20)
+export const libItemId = (type: string, sourceId: string) => 'lib_' + createHash('sha256').update(`${type}:${sourceId}`).digest('hex').slice(0, 20)
 const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', mp4: 'video/mp4', webm: 'video/webm', wav: 'audio/wav', mp3: 'audio/mpeg', ogg: 'audio/ogg', json: 'application/json' }
 const extOf = (p: string) => (p.split('.').pop() || '').toLowerCase()
 const mediaType = (name: string): LibType => (/^image\//.test(MIME[extOf(name)] || '') ? 'image' : 'media')
@@ -51,7 +52,7 @@ export type UpsertInput = {
 }
 
 export function upsertItem(i: UpsertInput): string | null {
-  const id = itemId(i.type, i.sourceId)
+  const id = libItemId(i.type, i.sourceId)
   if (db.prepare('select 1 from lib_tombstones where id=?').get(id)) return null
   const ex = db.prepare('select id,user_id,tags,meta from lib_items where id=?').get(id) as any
   if (ex && i.onlyIfNew) return id

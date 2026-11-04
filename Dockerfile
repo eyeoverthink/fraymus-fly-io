@@ -3,7 +3,9 @@ FROM node:24-slim
 WORKDIR /app
 # Story Shorts (server/shorts): free offline media tools. ffmpeg = clips/sfx/edit/captions/loudness, espeak-ng = offline voice,
 # DejaVu = caption font. GPU stages (pictures, image-to-video, Whisper) run on the PC/Pi and upload per shot.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak-ng fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
+# python3 (stdlib only, no pip packages) runs the vendored FRAYMUS Logic Chain (vendor/logic-chain) as a loopback sidecar
+# that server/logic-chain starts and supervises inside this same container.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak-ng fonts-dejavu-core python3 && rm -rf /var/lib/apt/lists/*
 
 # Piper (MIT, rhasspy/piper 2023.11.14-2 release: self-contained binary + onnxruntime + its own espeak-ng data) gives the
 # voice stage a natural neural narrator on CPU (~20x real time, ~100-200 MB RAM). espeak-ng above stays as the fallback.
@@ -29,6 +31,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --legacy-peer-deps --include=dev
 
 COPY . .
+# Fail the build if the vendored Logic Chain is missing or its interpreter is too old (it needs Python 3.10+).
+RUN python3 -c "import sys; assert sys.version_info >= (3, 10), sys.version" && test -f vendor/logic-chain/run.py
 ARG VITE_CLERK_PUBLISHABLE_KEY
 ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
 RUN npx vite build

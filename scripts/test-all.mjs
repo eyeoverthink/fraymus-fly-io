@@ -19,7 +19,7 @@ async function ready() {
   }
   throw new Error('server did not start')
 }
-const run = (file) => new Promise((res) => spawn(process.execPath, [file], { env, stdio: 'inherit' }).on('close', res))
+const run = (file) => new Promise((res) => (file.endsWith('.ts') ? spawn(win ? 'npx.cmd' : 'npx', ['tsx', file], { env, stdio: 'inherit', shell: win }) : spawn(process.execPath, [file], { env, stdio: 'inherit' })).on('close', res))
 
 let failed = 0
 try {
@@ -36,6 +36,9 @@ try {
   if (await run('scripts/test-library.mjs')) failed++
   console.log('\n== scripts/test-shorts.mjs (own server)')
   if (await run('scripts/test-shorts.mjs')) failed++
+  console.log('\n== scripts/test-logic-chain-unit.ts + scripts/test-logic-chain.mjs (own server + Python sidecar)')
+  if (await run('scripts/test-logic-chain-unit.ts')) failed++
+  if (await run('scripts/test-logic-chain.mjs')) failed++
 } catch (e) { console.error(e.message); failed++ } finally {
   stop()
   setTimeout(() => { try { rmSync(dataDir, { recursive: true, force: true }) } catch {} process.exit(failed ? 1 : 0) }, 1500)

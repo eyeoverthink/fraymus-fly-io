@@ -1,0 +1,650 @@
+{
+  "version": 2,
+  "note": "Controls test whether judges can tell a claim the ledger supports from one it does not, including changed numbers and swapped mechanisms. Planted claims are hidden among a real brief's claims to measure detection at real scale. Fabricated ones name products or figures no plan here uses. Distorted ones use ordinary words to state what a plan should not, such as a reversed decision. They are skipped for any ledger containing one of their markers. One author wrote all of this.",
+  "cases": [
+    {
+      "id": "notes",
+      "ledger": [
+        {
+          "field": "new_logic",
+          "text": "Store notes in SQLite on the device, and write each edit plus an outbox row in one transaction."
+        },
+        {
+          "field": "new_logic",
+          "text": "Each device holds a refresh token that the account page can revoke."
+        },
+        {
+          "field": "improved_logic",
+          "text": "Merge concurrent note bodies with the Yjs text CRDT."
+        },
+        {
+          "field": "improved_logic",
+          "text": "The server assigns each accepted change a monotonically increasing sequence number."
+        },
+        {
+          "field": "implementation_steps",
+          "text": "Keep tombstones for 90 days, then compact them in a nightly job."
+        },
+        {
+          "field": "implementation_steps",
+          "text": "Upload attachments separately through presigned URLs after the note syncs."
+        },
+        {
+          "field": "test_cases",
+          "text": "Partition two simulated devices, edit one note on both, reconnect, and assert that the bodies match."
+        },
+        {
+          "field": "test_cases",
+          "text": "Kill the app between the local commit and the upload, then assert the outbox row is still sent."
+        },
+        {
+          "field": "remaining_dependencies",
+          "text": "A hosted Postgres database for the server change log."
+        },
+        {
+          "field": "remaining_dependencies",
+          "text": "Apple and Google push services to wake devices for sync."
+        },
+        {
+          "field": "new_logic",
+          "text": "Encrypt the local database with SQLCipher, using a key held in the platform keychain."
+        },
+        {
+          "field": "improved_logic",
+          "text": "A client below the minimum protocol version sees a forced-upgrade screen."
+        }
+      ],
+      "claims": [
+        {
+          "text": "Each edit and its outbox row are committed together in a single SQLite transaction.",
+          "supported": true
+        },
+        {
+          "text": "Note bodies are merged with the Yjs CRDT, and changes are ordered by a sequence number the server assigns.",
+          "supported": true
+        },
+        {
+          "text": "A nightly job compacts tombstones once they are 90 days old.",
+          "supported": true
+        },
+        {
+          "text": "Attachments go up through presigned URLs after the note itself has synced.",
+          "supported": true
+        },
+        {
+          "text": "The local database is encrypted with SQLCipher, and its key lives in the keychain.",
+          "supported": true
+        },
+        {
+          "text": "Tombstones are kept for 30 days before compaction.",
+          "supported": false,
+          "why": "changed number"
+        },
+        {
+          "text": "Note bodies are merged with the Automerge CRDT.",
+          "supported": false,
+          "why": "swapped mechanism"
+        },
+        {
+          "text": "Devices sync over a WebSocket connection that retries every 15 seconds.",
+          "supported": false,
+          "why": "invented"
+        },
+        {
+          "text": "The server change log is stored in a hosted MongoDB cluster.",
+          "supported": false,
+          "why": "swapped mechanism"
+        },
+        {
+          "text": "Users must approve each new device from an existing device with a six-digit code.",
+          "supported": false,
+          "why": "invented"
+        }
+      ],
+      "planted": [
+        {
+          "text": "The sync worker opens a gRPC stream to the regional gateway and renews its lease every 37 seconds.",
+          "markers": [
+            "grpc",
+            "37 seconds"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Note history is mirrored nightly to a Cassandra cluster with a replication factor of 5.",
+          "markers": [
+            "cassandra"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Each device keeps at most 4,096 unsent operations and pauses editing once that bound is reached.",
+          "markers": [
+            "4,096",
+            "4096"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Conflict copies are sent to the Zendesk queue for review by a support agent.",
+          "markers": [
+            "zendesk"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Attachments are deduplicated with the BLAKE3 hash and stored in a Backblaze B2 bucket.",
+          "markers": [
+            "blake3",
+            "backblaze"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Concurrent edits to the same note are resolved by keeping the one with the later device timestamp.",
+          "markers": [
+            "later device timestamp"
+          ],
+          "kind": "distorted"
+        },
+        {
+          "text": "Clients download the entire note collection on every sync rather than fetching changes.",
+          "markers": [
+            "entire note collection"
+          ],
+          "kind": "distorted"
+        },
+        {
+          "text": "Notes are stored only on the server, and the app shows an error when offline.",
+          "markers": [
+            "stored only on the server"
+          ],
+          "kind": "distorted"
+        }
+      ]
+    },
+    {
+      "id": "rate-limiter",
+      "ledger": [
+        {
+          "field": "new_logic",
+          "text": "Give each tenant a token bucket with a refill rate and a burst capacity."
+        },
+        {
+          "field": "new_logic",
+          "text": "Keep buckets in Redis and update them with an atomic Lua script."
+        },
+        {
+          "field": "improved_logic",
+          "text": "Under overload, weighted fair queueing divides capacity in proportion to plan weight."
+        },
+        {
+          "field": "improved_logic",
+          "text": "Reject with HTTP 429 and a Retry-After header that includes up to 30 percent jitter."
+        },
+        {
+          "field": "implementation_steps",
+          "text": "Gateways poll tenant limits from the config service every 30 seconds."
+        },
+        {
+          "field": "implementation_steps",
+          "text": "If Redis is down, fail open and apply a conservative per-node limit."
+        },
+        {
+          "field": "test_cases",
+          "text": "One tenant sends 20 times its quota while nine stay at quota, and those nine must keep 99 percent success."
+        },
+        {
+          "field": "test_cases",
+          "text": "Kill the Redis primary during load and assert that the per-node limit applies within 5 seconds."
+        },
+        {
+          "field": "remaining_dependencies",
+          "text": "A Redis cluster with one replica per shard."
+        },
+        {
+          "field": "remaining_dependencies",
+          "text": "A metrics pipeline that reports rejected requests per tenant."
+        },
+        {
+          "field": "new_logic",
+          "text": "Report exports cost 50 tokens, and simple reads cost 1 token."
+        },
+        {
+          "field": "improved_logic",
+          "text": "The tenant id comes from the verified API key, and unauthenticated traffic is limited per IP address."
+        }
+      ],
+      "claims": [
+        {
+          "text": "Buckets live in Redis and are changed through an atomic Lua script.",
+          "supported": true
+        },
+        {
+          "text": "Capacity under overload is shared by weighted fair queueing according to plan weight.",
+          "supported": true
+        },
+        {
+          "text": "A rejected request receives a 429 whose Retry-After value is jittered by up to 30 percent.",
+          "supported": true
+        },
+        {
+          "text": "The load test sends 20 times quota from one tenant and requires 99 percent success for the other nine.",
+          "supported": true
+        },
+        {
+          "text": "When Redis is unavailable the gateway fails open with a conservative limit on each node.",
+          "supported": true
+        },
+        {
+          "text": "Gateways poll tenant limits every 5 minutes.",
+          "supported": false,
+          "why": "changed number"
+        },
+        {
+          "text": "When Redis is unavailable the gateway fails closed and rejects all traffic.",
+          "supported": false,
+          "why": "reversed decision"
+        },
+        {
+          "text": "Buckets live in Memcached and are updated with compare-and-swap.",
+          "supported": false,
+          "why": "swapped mechanism"
+        },
+        {
+          "text": "Enterprise tenants can buy burst credits through the billing portal.",
+          "supported": false,
+          "why": "invented"
+        },
+        {
+          "text": "Limits are enforced by an Envoy sidecar in each Kubernetes pod.",
+          "supported": false,
+          "why": "invented"
+        }
+      ],
+      "planted": [
+        {
+          "text": "Tenant shares are recomputed by a Flink job that publishes new weights every 11 seconds.",
+          "markers": [
+            "flink"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Rejected requests are mirrored to a Pulsar topic retained for 72 hours.",
+          "markers": [
+            "pulsar"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Each gateway caches quota decisions in Caffeine with a 250 millisecond expiry.",
+          "markers": [
+            "caffeine"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Enterprise tenants may buy surge packs of 500,000 tokens through the Stripe billing portal.",
+          "markers": [
+            "stripe",
+            "surge pack"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "The limiter runs as a WebAssembly filter compiled from Zig and loaded into each gateway.",
+          "markers": [
+            "zig",
+            "webassembly"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "When the shared store is unavailable, every gateway fails closed and rejects all traffic.",
+          "markers": [
+            "rejects all traffic"
+          ],
+          "kind": "distorted"
+        },
+        {
+          "text": "Each tenant receives an identical fixed share of capacity regardless of its plan.",
+          "markers": [
+            "identical fixed share"
+          ],
+          "kind": "distorted"
+        },
+        {
+          "text": "Tenant identity is read from a header that the client sets on each request.",
+          "markers": [
+            "header that the client sets"
+          ],
+          "kind": "distorted"
+        }
+      ]
+    },
+    {
+      "id": "backup",
+      "ledger": [
+        {
+          "field": "new_logic",
+          "text": "Send nightly backups to S3 with Object Lock in compliance mode for 35 days."
+        },
+        {
+          "field": "new_logic",
+          "text": "Hold a second copy in a separate cloud account that shares no credentials with production."
+        },
+        {
+          "field": "improved_logic",
+          "text": "Keep backups for 90 days, because attackers can stay undetected for weeks."
+        },
+        {
+          "field": "improved_logic",
+          "text": "Scan candidate restore points on an isolated network before recovery."
+        },
+        {
+          "field": "implementation_steps",
+          "text": "On the first Monday of each month, restore one server and one mailbox and compare checksums."
+        },
+        {
+          "field": "implementation_steps",
+          "text": "Print the backup encryption key and keep it in the owner's bank safe."
+        },
+        {
+          "field": "test_cases",
+          "text": "Delete a backup with a production admin account and assert that the attempt is refused."
+        },
+        {
+          "field": "test_cases",
+          "text": "Time a full restore of the file server and assert that it finishes within 8 hours."
+        },
+        {
+          "field": "remaining_dependencies",
+          "text": "A budget of about 150 dollars a month for storage."
+        },
+        {
+          "field": "remaining_dependencies",
+          "text": "A named owner, who is the office manager, for the weekly check."
+        },
+        {
+          "field": "new_logic",
+          "text": "The recovery point objective is 24 hours and the recovery time objective is 8 hours."
+        },
+        {
+          "field": "improved_logic",
+          "text": "Back up Microsoft 365 mail and the Entra ID configuration as well as file servers."
+        }
+      ],
+      "claims": [
+        {
+          "text": "Nightly backups are written to S3 under compliance-mode Object Lock for 35 days.",
+          "supported": true
+        },
+        {
+          "text": "A second copy sits in another cloud account with no shared credentials.",
+          "supported": true
+        },
+        {
+          "text": "The 90-day retention is chosen because attackers can remain undetected for weeks.",
+          "supported": true
+        },
+        {
+          "text": "The monthly drill restores one server and one mailbox and compares checksums.",
+          "supported": true
+        },
+        {
+          "text": "The objectives are a 24-hour recovery point and an 8-hour recovery time.",
+          "supported": true
+        },
+        {
+          "text": "Backups are retained for 30 days.",
+          "supported": false,
+          "why": "changed number"
+        },
+        {
+          "text": "Backups go to Azure Blob immutable storage for 35 days.",
+          "supported": false,
+          "why": "swapped mechanism"
+        },
+        {
+          "text": "The encryption key is stored in AWS KMS in the production account.",
+          "supported": false,
+          "why": "reversed decision"
+        },
+        {
+          "text": "A managed service provider monitors the backups around the clock.",
+          "supported": false,
+          "why": "invented"
+        },
+        {
+          "text": "Laptops are backed up hourly with a local agent.",
+          "supported": false,
+          "why": "invented"
+        }
+      ],
+      "planted": [
+        {
+          "text": "Tapes from an LTO-9 library are rotated to a salt-mine vault every 14 days.",
+          "markers": [
+            "lto",
+            "salt-mine",
+            "salt mine"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Restores are rehearsed on Proxmox hosts rented from Hetzner each quarter.",
+          "markers": [
+            "proxmox",
+            "hetzner"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "A Wazuh agent on each server raises an alert when more than 2,500 files change in ten minutes.",
+          "markers": [
+            "wazuh"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "The insurer Coalition must approve the restore plan before each annual renewal.",
+          "markers": [
+            "coalition"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Backups are split with Reed-Solomon coding across seven regional co-location sites.",
+          "markers": [
+            "reed-solomon",
+            "reed solomon"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Backups are kept for 7 days and then deleted.",
+          "markers": [
+            "7 days and then deleted"
+          ],
+          "kind": "distorted"
+        },
+        {
+          "text": "Production domain administrators hold delete rights on the immutable copy.",
+          "markers": [
+            "hold delete rights"
+          ],
+          "kind": "distorted"
+        },
+        {
+          "text": "Restore tests are skipped once the vendor has certified the product.",
+          "markers": [
+            "restore tests are skipped"
+          ],
+          "kind": "distorted"
+        }
+      ]
+    },
+    {
+      "id": "recipes",
+      "ledger": [
+        {
+          "field": "new_logic",
+          "text": "Keep all recipes in a local database on the phone, so they work with no connection."
+        },
+        {
+          "field": "new_logic",
+          "text": "Split a recipe into title, ingredient rows and steps, and merge each separately."
+        },
+        {
+          "field": "improved_logic",
+          "text": "When two relatives change one step differently, show both versions side by side and ask which to keep."
+        },
+        {
+          "field": "improved_logic",
+          "text": "Save a version on every edit, and let anyone restore an earlier one."
+        },
+        {
+          "field": "implementation_steps",
+          "text": "The group owner invites relatives by link and can remove a member from family settings."
+        },
+        {
+          "field": "implementation_steps",
+          "text": "Compress photos taken offline to under 1 MB and queue them for upload."
+        },
+        {
+          "field": "test_cases",
+          "text": "Take two devices offline, change different ingredients on each, sync, and assert that both changes appear."
+        },
+        {
+          "field": "test_cases",
+          "text": "Delete a recipe, then restore it from the trash within 30 days."
+        },
+        {
+          "field": "remaining_dependencies",
+          "text": "An email service that sends sign-in codes."
+        },
+        {
+          "field": "remaining_dependencies",
+          "text": "Cloud storage for recipe photos."
+        },
+        {
+          "field": "new_logic",
+          "text": "Store each ingredient as a quantity, a unit and a name, so a recipe can be scaled."
+        },
+        {
+          "field": "improved_logic",
+          "text": "Relatives sign in with an emailed code and no password, and the app supports large text."
+        }
+      ],
+      "claims": [
+        {
+          "text": "Recipes are stored on the phone in a local database and open with no connection.",
+          "supported": true
+        },
+        {
+          "text": "Title, ingredient rows and steps are merged separately.",
+          "supported": true
+        },
+        {
+          "text": "A real conflict shows both versions side by side and asks which to keep.",
+          "supported": true
+        },
+        {
+          "text": "Photos taken offline are compressed below 1 MB and queued.",
+          "supported": true
+        },
+        {
+          "text": "Sign-in uses an emailed code rather than a password, and large text is supported.",
+          "supported": true
+        },
+        {
+          "text": "Deleted recipes stay in the trash for 90 days.",
+          "supported": false,
+          "why": "changed number"
+        },
+        {
+          "text": "Any relative can remove a member from the family.",
+          "supported": false,
+          "why": "reversed decision"
+        },
+        {
+          "text": "Relatives sign in with Google or Apple accounts.",
+          "supported": false,
+          "why": "swapped mechanism"
+        },
+        {
+          "text": "Recipes can be imported from a photo of a handwritten card.",
+          "supported": false,
+          "why": "invented"
+        },
+        {
+          "text": "Grocery lists are generated from the week's chosen recipes.",
+          "supported": false,
+          "why": "invented"
+        }
+      ],
+      "planted": [
+        {
+          "text": "Handwritten cards are read with Tesseract and matched against the USDA FoodData Central catalogue.",
+          "markers": [
+            "tesseract",
+            "fooddata",
+            "usda"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Family groups are capped at 64 members and stored in a Neo4j graph.",
+          "markers": [
+            "neo4j"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Each holiday, the app prints a keepsake cookbook through the Lulu print API.",
+          "markers": [
+            "lulu"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Recipe text is translated on the device with a quantized NLLB model.",
+          "markers": [
+            "nllb"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "Oven temperatures are pushed to smart ovens over the Matter protocol.",
+          "markers": [
+            "matter protocol",
+            "smart oven"
+          ],
+          "kind": "fabricated"
+        },
+        {
+          "text": "When two relatives edit a recipe, the newest save overwrites the whole recipe.",
+          "markers": [
+            "overwrites the whole recipe"
+          ],
+          "kind": "distorted"
+        },
+        {
+          "text": "Only the group owner may edit a recipe.",
+          "markers": [
+            "only the group owner may edit"
+          ],
+          "kind": "distorted"
+        },
+        {
+          "text": "Recipes cannot be opened without a network connection.",
+          "markers": [
+            "cannot be opened without"
+          ],
+          "kind": "distorted"
+        }
+      ]
+    }
+  ]
+}

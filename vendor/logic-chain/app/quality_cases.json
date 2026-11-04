@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "note": "Checklists were written from each objective alone, before any brief was read for this purpose. One author wrote them, so they measure coverage of that author's list and not whether a plan is good. Each control pair has known answers and tests the judges: a mention without a decision must not count as met.",
+  "cases": [
+    {
+      "id": "notes",
+      "requests": ["Plan an offline-first notes app with sync"],
+      "criteria": [
+        {"id": "n1", "text": "Pending local changes sit in a durable queue or log that survives an app restart and is retried until the server accepts them."},
+        {"id": "n2", "text": "Retrying a sync cannot apply the same change twice, through unique operation ids or an equivalent idempotency mechanism."},
+        {"id": "n3", "text": "It chooses a specific strategy for concurrent edits to the same note, such as a CRDT, three-way merge or conflict copies, and says how no edit is silently lost."},
+        {"id": "n4", "text": "It decides what happens when one device deletes a note while another edits it, using tombstones or a stated rule."},
+        {"id": "n5", "text": "Ordering of changes does not depend on device wall clocks, through a logical clock, version vector or server-assigned sequence."},
+        {"id": "n6", "text": "It says how a client that stayed offline through a schema or protocol change is handled, such as version negotiation, migration or a forced upgrade."},
+        {"id": "n7", "text": "It says how a lost or stolen device loses access, such as revoking its token or device key."},
+        {"id": "n8", "text": "It makes a decision on encrypting note content: end-to-end, or at rest locally and on the server, and says which."},
+        {"id": "n9", "text": "It bounds how long tombstones or sync logs are kept, and says what happens to a device that was offline for longer than that."},
+        {"id": "n10", "text": "It specifies a test where two devices edit offline and then sync, and asserts that they converge with no edit lost."}
+      ],
+      "controls": [
+        {"id": "notes-a", "met": ["n1", "n3", "n5", "n7", "n9"], "text": "# Notes app plan\n\nEvery edit is first written to a SQLite outbox table in the same transaction as the note, and a background worker resends rows until the server acknowledges them, including after a restart.\n\nConcurrent edits to one note are merged with a text CRDT (Yjs), so both sides keep their text and nothing is overwritten.\n\nThe server assigns every accepted change a monotonically increasing sequence number, and clients order by that number and never by their own clock.\n\nEach device has its own refresh token. From account settings a user can revoke a lost device, and the server then rejects that token.\n\nTombstones and the change log are kept for 90 days. A device offline for longer must discard its log and do a full resync, and its unsynced notes are saved as new notes.\n\nSync should be reliable, and retries are handled sensibly. We will think about upgrades later. Testing will be thorough."},
+        {"id": "notes-b", "met": ["n2", "n4", "n6", "n8", "n10"], "text": "# Notes app plan\n\nEach change carries a client-generated UUID, and the server stores seen UUIDs so a retried request is ignored rather than applied twice.\n\nIf one device deletes a note while another edits it, the edit wins: the note is restored and the delete is recorded in history.\n\nEvery sync request includes a protocol version. A client older than the minimum supported version gets a forced-upgrade screen, and its local data is migrated at startup by numbered migrations.\n\nNote content is encrypted end-to-end with a per-account key held only on devices, so the server stores ciphertext.\n\nThe release test creates two simulated devices, takes both offline, edits the same note on each, reconnects them, and asserts both hold identical content containing both edits.\n\nChanges are saved locally and sent when possible. Conflicts will be handled appropriately. Security for lost devices matters and should be considered."}
+      ]
+    },
+    {
+      "id": "rate-limiter",
+      "requests": ["Design a rate limiter for a public REST API that must stay fair across tenants during traffic spikes"],
+      "criteria": [
+        {"id": "r1", "text": "It names a specific per-tenant limiting algorithm, such as token bucket or sliding window."},
+        {"id": "r2", "text": "It specifies how shared capacity is divided under global overload, such as weighted fair queueing, max-min shares or dynamic quotas, so one tenant cannot starve the others."},
+        {"id": "r3", "text": "It says how limits are enforced across many gateway nodes, such as atomic operations on a shared store or local allotments that are refreshed."},
+        {"id": "r4", "text": "It makes an explicit fail-open or fail-closed decision for when the limiter's store is unavailable."},
+        {"id": "r5", "text": "It defines the rejection contract: HTTP 429 with Retry-After or rate limit headers."},
+        {"id": "r6", "text": "Tenant identity comes from an authenticated credential and not a client-supplied value, and it says how unauthenticated traffic is limited."},
+        {"id": "r7", "text": "It addresses retry storms after rejection, such as jittered Retry-After values, retry budgets or client backoff guidance."},
+        {"id": "r8", "text": "Requests are weighted by cost, so an expensive endpoint consumes more quota than a cheap one."},
+        {"id": "r9", "text": "Per-tenant limits or tiers can be changed through configuration without a deploy."},
+        {"id": "r10", "text": "It specifies a noisy-neighbour load test with a numeric bound on the success rate or latency of the other tenants."}
+      ],
+      "controls": [
+        {"id": "rate-a", "met": ["r1", "r3", "r5", "r7", "r9"], "text": "# Rate limiter design\n\nEach tenant has a token bucket with a refill rate and a burst size.\n\nBuckets live in Redis and are updated by an atomic Lua script, so all gateway nodes share the same count.\n\nA rejected request gets HTTP 429 with Retry-After and X-RateLimit-Remaining headers.\n\nRetry-After values include random jitter of up to 30 percent, so rejected clients do not all return at the same moment.\n\nTenant limits are rows in a config service that gateways poll every 30 seconds, so support staff can change a tier without a deploy.\n\nFairness during spikes is important and the system should behave well. Availability of the store needs consideration. We should test under load."},
+        {"id": "rate-b", "met": ["r2", "r4", "r6", "r8", "r10"], "text": "# Rate limiter design\n\nWhen total load exceeds capacity, a weighted fair queue gives each tenant a share in proportion to its plan weight, and unused share is redistributed, so a single tenant cannot starve the others.\n\nIf Redis is unavailable the gateway fails open and applies a conservative per-node limit until it recovers.\n\nTenant id is taken from the verified API key, and never from a request header. Unauthenticated requests are limited per IP address.\n\nEach endpoint has a cost in tokens: a report export costs 50 and a simple read costs 1.\n\nThe load test has one tenant send 20 times its quota while nine others stay at quota, and it passes only if the others keep at least 99 percent success and p99 latency under 300 ms.\n\nA suitable algorithm will be selected. Clients receive an error when limited. Limits can be adjusted over time."}
+      ]
+    },
+    {
+      "id": "backup",
+      "requests": ["Design a backup system for a small business that can survive ransomware"],
+      "criteria": [
+        {"id": "b1", "text": "At least one copy is immutable for a stated period, through object lock, WORM storage or equivalent."},
+        {"id": "b2", "text": "At least one copy is out of reach of production credentials, so a compromised admin account cannot delete it, through an air gap, a separate account or offline media."},
+        {"id": "b3", "text": "It states how many copies are kept and in how many separate locations."},
+        {"id": "b4", "text": "It states a retention window and justifies it against infections that stay undetected for weeks."},
+        {"id": "b5", "text": "It schedules restore tests with a defined pass condition."},
+        {"id": "b6", "text": "It gives numeric recovery point and recovery time objectives."},
+        {"id": "b7", "text": "It says how a clean restore point is chosen and restored without reinfection, such as scanning in an isolated environment."},
+        {"id": "b8", "text": "Backups are encrypted, and the keys are stored apart from production so they survive the loss of production systems."},
+        {"id": "b9", "text": "The scope includes SaaS data or identity and configuration, and not only file servers."},
+        {"id": "b10", "text": "It fits a small business with a stated monthly cost or a named owner for a business without dedicated IT staff."}
+      ],
+      "controls": [
+        {"id": "backup-a", "met": ["b1", "b3", "b5", "b7", "b9"], "text": "# Backup plan\n\nNightly backups go to S3 with Object Lock in compliance mode for 35 days, so they cannot be altered or removed during that period.\n\nWe keep three copies in two locations: the production data, a local NAS and the S3 bucket.\n\nOn the first Monday of each month a staff member restores one server and one mailbox, and the test passes if files open and checksums match.\n\nBefore recovery, candidate restore points are mounted in an isolated network, scanned with two antivirus engines, and the newest clean one is used.\n\nThe scope covers file servers, Microsoft 365 mail and the Entra ID configuration.\n\nAccess to backups should be restricted. Retention should be adequate. Recovery should be fast."},
+        {"id": "backup-b", "met": ["b2", "b4", "b6", "b8", "b10"], "text": "# Backup plan\n\nA second copy is held in a separate cloud account with its own credentials and no trust link to production, so a compromised domain admin cannot reach or delete it.\n\nRetention is 90 days, because attackers often remain undetected for weeks and a shorter window could contain only infected backups.\n\nThe recovery point objective is 24 hours and the recovery time objective is 8 hours.\n\nBackups are encrypted with AES-256, and the key is printed and kept in the owner's bank safe, apart from every production system.\n\nThe cost is about 150 dollars a month, and the office manager owns the weekly check, as the business has no IT staff.\n\nData will be protected from tampering. Multiple copies are a good idea. Restores should be tried occasionally."}
+      ]
+    },
+    {
+      "id": "recipes",
+      "requests": ["Plan a shared family recipe app that works offline and lets relatives edit the same recipe"],
+      "criteria": [
+        {"id": "f1", "text": "Recipes can be read and edited with no connection, with the data stored on the device."},
+        {"id": "f2", "text": "Concurrent edits merge below the whole-recipe level, such as per field or per ingredient, rather than one version overwriting another."},
+        {"id": "f3", "text": "When edits truly conflict, a relative sees both versions in plain language and can choose."},
+        {"id": "f4", "text": "Each recipe keeps a version history, and an earlier version can be restored."},
+        {"id": "f5", "text": "It defines how relatives join the family group and how a member is removed."},
+        {"id": "f6", "text": "It accommodates less technical relatives, with a concrete measure such as passwordless sign-in or large text."},
+        {"id": "f7", "text": "A deleted recipe can be recovered, and it says who is allowed to delete."},
+        {"id": "f8", "text": "It says how photos are handled offline, such as queued uploads, and how their storage size is limited."},
+        {"id": "f9", "text": "Ingredients are stored as structured quantities and units, not only free text."},
+        {"id": "f10", "text": "It specifies a test where two offline devices edit the same recipe and then sync, and asserts that neither edit is lost."}
+      ],
+      "controls": [
+        {"id": "recipes-a", "met": ["f1", "f3", "f5", "f7", "f9"], "text": "# Family recipes plan\n\nAll recipes are kept in a local database on the phone, so they can be opened and changed with no connection.\n\nIf two relatives change the same step differently, the app shows both versions side by side, saying \"Grandma's version\" and \"Sam's version\", and asks which to keep.\n\nThe group owner sends an invite link, and can remove a member from the family settings screen.\n\nDeleted recipes go to a trash folder for 30 days, and only the person who added a recipe or the group owner can delete it.\n\nEach ingredient is stored as a quantity, a unit and a name, so a recipe can be scaled.\n\nEditing should sync smoothly. The app should be easy for everyone. Photos will be supported. We will test it."},
+        {"id": "recipes-b", "met": ["f2", "f4", "f6", "f8", "f10"], "text": "# Family recipes plan\n\nA recipe is split into title, ingredient rows and steps, and each is merged separately, so one relative changing the salt and another changing the oven time both stick.\n\nEvery save creates a version, and anyone can open the history and restore an earlier version.\n\nRelatives sign in with a code sent by email and no password, and the app supports large text sizes.\n\nPhotos taken offline are compressed to under 1 MB and queued, and they upload when a connection returns.\n\nThe test puts two simulated devices offline, changes different ingredients of one recipe on each, syncs them, and asserts both changes are present on both devices.\n\nThe app should cope with poor connections. Family members will be able to share. Mistakes can be managed."}
+      ]
+    }
+  ]
+}

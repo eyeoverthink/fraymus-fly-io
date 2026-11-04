@@ -1,0 +1,11 @@
+.git
+.env
+runs
+skills
+benchmarks
+quality
+identity
+tests
+examples
+**/__pycache__
+config/providers.json

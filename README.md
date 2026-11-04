@@ -8,6 +8,7 @@ What is in it:
 - **Shopify credit fulfillment + buyer page** (`/enhance`): Shopify order webhook adds credits, buyers sign in with an emailed one-time code (Resend) and run the paid pipeline.
 - **Agents** (`agents/*.md`) with tools, approvals, memory, an MCP server/hub and a cron scheduler.
 - **Library**: every image, clip, chat, memory and pipeline stage is saved and browsable (`/api/library`, Library tab, export).
+- **FRAYMUS Logic Chain**: eight model seats over two passes produce an Ed25519-signed audit chain, a brief and a candidate skill package. It runs as a loopback Python sidecar, is MOCK by default with spending caps on live runs, and saves to the Library. See [docs/LOGIC-CHAIN.md](docs/LOGIC-CHAIN.md).
 - **Story Shorts**: an offline pipeline that turns a narration into a vertical cartoon short (FFmpeg + sharp + Piper voice), with an optional PC worker that adds GPU pictures/clips and your own **VoiceStudio** voice.
 
 ## Run it
@@ -22,7 +23,7 @@ The image includes ffmpeg, espeak-ng, Piper and the public-domain `en_US-ljspeec
 
 ### B. Node directly
 
-Prerequisites: Node 22.5+ (24 recommended, uses built-in `node:sqlite`), npm, and for Story Shorts `ffmpeg` + `espeak-ng` on PATH. Optional: Piper (`PIPER_BIN`, `PIPER_MODEL` = a `.onnx` with its `.onnx.json`) for the natural voice; without it the voice stage uses espeak-ng.
+Prerequisites: Node 22.5+ (24 recommended, uses built-in `node:sqlite`), npm, Python 3.10+ for the Logic Chain sidecar, and for Story Shorts `ffmpeg` + `espeak-ng` on PATH. Optional: Piper (`PIPER_BIN`, `PIPER_MODEL` = a `.onnx` with its `.onnx.json`) for the natural voice; without it the voice stage uses espeak-ng.
 
     npm install --legacy-peer-deps
     cp .env.example .env
@@ -51,6 +52,7 @@ All settings are environment variables; [.env.example](.env.example) lists every
 | Shopify / buyers | `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_PACK_PRODUCT_ID`, `SHOPIFY_CREDITS_PER_PACK`, `RESEND_API_KEY`, `MAIL_FROM`, `BUYER_PIPELINE_STRICT`, `FREE_CREDITS` |
 | Billing | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_METER_EVENT_NAME` |
 | Story Shorts | `PIPER_BIN`, `PIPER_MODEL`, `PIPER_LENGTH_SCALE`, `PIPER_SENTENCE_SILENCE`, `ESPEAK_*`, `FFMPEG_BIN`, `FFPROBE_BIN`, `SHORTS_MAX_CONCURRENT`, `SHORTS_FFMPEG_THREADS` |
+| Logic Chain | `LOGIC_CHAIN`, `LOGIC_CHAIN_PROVIDERS`, `XAI_API_KEY`, `GEMINI_API_KEY` (+ `OPENAI_*`, `PROMPT_LLM_API_KEY` for xAI), `LOGIC_CHAIN_*_MODEL`, `LOGIC_CHAIN_MAX_RUN_CENTS`, `LOGIC_CHAIN_MAX_PLAN_CALLS`, `LOGIC_CHAIN_MAX_SECONDS`, `FRAYMUS_IDENTITY_FILE`, `FRAYMUS_IDENTITY_SEED`, `LOGIC_CHAIN_PYTHON/DIR/PORT/URL` |
 | Media/MCP | `VOICESTUDIO_MCP_URL`, `PHOTOCRAFT_CLI`, `REA_MCP`, `MCP_SERVERS_FILE`, `ALLOW_STDIO_IMPORT`, `AGENTS_DIR`, `SCHEDULER` |
 
 Optional Supabase store instead of SQLite: `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` (Shopify credits need SQLite).
@@ -62,7 +64,7 @@ Optional Supabase store instead of SQLite: `SUPABASE_URL` + `SUPABASE_SERVICE_KE
 
 ## Library
 
-Everything the app makes is saved as a Library item (types: image, media, chat, evolve, fossil, pattern, memory, akashic, canvas, buyer, pipeline) with tags, thumbnails and files: `GET /api/library`, `/api/library/items/:id[/file|/thumb]`, `/api/library/export`. Story Shorts stages show up as `pipeline` items.
+Everything the app makes is saved as a Library item (types: image, media, chat, evolve, fossil, pattern, memory, akashic, canvas, buyer, pipeline, logic) with tags, thumbnails and files: `GET /api/library`, `/api/library/items/:id[/file|/thumb]`, `/api/library/export`. Story Shorts stages show up as `pipeline` items; Logic Chain briefs, signed `run.json` and skill packages as `logic` items.
 
 ## Agents
 
@@ -104,6 +106,18 @@ Everything Base44 did for agents now runs here, free and self-hosted. Other agen
 ## Automations (scheduler)
 
 Cron-scheduled (5-field, **UTC**) agent runs or tool calls, replacing Base44 scheduled automations. Manage via `/api/automations` or the MCP tools `list_automations`, `upsert_automation` (admin), `run_automation`, `automation_runs`, `delete_automation`. Templates (`daily-report`, `six-hour-research`, `heartbeat`) install disabled. Unattended agent runs never auto-approve risky tools; they end as `awaiting_approval`. Tool automations call the tool directly (admin-created only). Set `SCHEDULER=off` to disable the ticker. Not ported: LinkedIn, Google Calendar and Base44-entity triggers (no native equivalent), and data-change triggers (use `POST /api/automations/:id/trigger` from a webhook).
+
+## FRAYMUS Logic Chain
+
+[FRAYMUS-Logic-Chain](https://github.com/eyeoverthink/FRAYMUS-Logic-Chain) is vendored at a pinned commit in `vendor/logic-chain` (see `UPSTREAM.md`; update it with `scripts/sync-logic-chain.sh <sha>`). The app runs it as a supervised child process on `127.0.0.1` inside the same container, so it needs no extra service, port or Fly process. Full details: [docs/LOGIC-CHAIN.md](docs/LOGIC-CHAIN.md).
+
+- **API**: `POST /api/logic-chain/runs` `{objective}` → `202`. Then `GET /api/logic-chain/runs/:id` (status, label, brief, Library links, `?full=1` = signed `run.json`), `GET .../verify`, `GET .../document`, `POST .../cancel`, `GET /api/logic-chain/status`, `GET /api/logic-chain/skills`, and `POST /api/logic-chain/skills/:id/agents`.
+- **Mock vs live**: runs are **MOCK** (demo fixtures, no network, $0, labelled MOCK everywhere) unless the owner sends `mode: "live"` with `approveSpend: true`. Live runs use server-side keys only (`XAI_API_KEY` or the x.ai `PROMPT_LLM_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`). They are capped at $1.00 and 60 calls by default. A run is labelled LIVE only if every stage used a real model.
+- **Signing**: `FRAYMUS_IDENTITY_FILE` or the `FRAYMUS_IDENTITY_SEED` secret. If neither is set, a clearly labelled **LOCAL KEY** is used.
+- **Library + skills**: each run saves a brief, the signed `run.json` and its skill package (type `logic`). Skill packages are registered for **no** agent until you select agents. They are specifications, never executed.
+- **Agent tools**: `logic_chain_run` (approval), plus `logic_chain_status`, `logic_chain_verify` and `logic_chain_skills` (safe).
+- **Standalone**: `cd vendor/logic-chain && docker compose up --build` → http://127.0.0.1:8765.
+- Test: `npm run test:logic-chain`.
 
 ## Story Shorts (offline pipeline)
 

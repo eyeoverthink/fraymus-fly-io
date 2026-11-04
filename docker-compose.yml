@@ -1,6 +1,9 @@
 # Run the whole app without Fly.io: `cp .env.example .env` (fill what you need), then `docker compose up -d --build`.
 # Same image as Fly (Dockerfile): Node 24, ffmpeg, espeak-ng, Piper + the public-domain ljspeech voice, built UI.
 # Data (SQLite DBs, outputs, Library, shorts runs) lives in the named volume below, mounted at /data like Fly's volume.
+# The FRAYMUS Logic Chain sidecar needs no service of its own: the app starts it inside this container on 127.0.0.1
+# (its Host check only accepts loopback) and keeps its runs in /data/logic-chain. To run the Logic Chain alone, without
+# this app: `cd vendor/logic-chain && docker compose up --build` (http://127.0.0.1:8765). See docs/LOGIC-CHAIN.md.
 services:
   nodular:
     build:
@@ -17,6 +20,9 @@ services:
     environment:
       PORT: "3001"
       DATA_DIR: /data
+      # Logic Chain defaults: MOCK runs unless a caller asks for live AND approves spend; caps below apply to live runs.
+      LOGIC_CHAIN_MAX_RUN_CENTS: ${LOGIC_CHAIN_MAX_RUN_CENTS:-100}
+      LOGIC_CHAIN_MAX_PLAN_CALLS: ${LOGIC_CHAIN_MAX_PLAN_CALLS:-60}
     volumes:
       - nodular-data:/data
     restart: unless-stopped

@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "labels": "Every label must follow from the request text alone. decide: the text leaves a material conflict or gap open. settled: a sentence in the text resolves it. noise: not a real or material issue once the text is read.",
+  "scenarios": [
+    {
+      "id": "payments",
+      "request": "Build a payment webhook receiver. Each event carries a unique event_id, which we store under a unique index so repeats are ignored. The sender retries failed deliveries for 72 hours. Stored event ids are purged after 24 hours. We answer within 2 seconds and do the work later from a queue. Amounts are stored as integer cents and shown in the UI as dollars with two decimals.",
+      "items": [
+        {"id": "late-retry", "kind": "contradictions", "label": "decide", "text": "Event ids are purged after 24 hours but retries continue for 72 hours, so a late retry can be processed twice.", "why": "24 is less than 72 and nothing else in the text closes the window."},
+        {"id": "poison-event", "kind": "unsupported_claims", "label": "decide", "text": "The design does not say what happens to a queued event that keeps failing, so money events could be lost silently.", "why": "The text describes queueing but no failure path."},
+        {"id": "slow-work", "kind": "contradictions", "label": "settled", "text": "Heavy processing could make the receiver miss the sender's response deadline.", "why": "The text answers within 2 seconds and does the work later from a queue."},
+        {"id": "float-money", "kind": "unsupported_claims", "label": "settled", "text": "Floating point arithmetic could corrupt money totals.", "why": "The text stores amounts as integer cents."},
+        {"id": "cents-dollars", "kind": "contradictions", "label": "noise", "text": "Amounts are stored in cents but shown in dollars, so storage and display disagree.", "why": "Storing a minor unit and displaying a major unit is compatible."},
+        {"id": "two-seconds", "kind": "unsupported_claims", "label": "noise", "text": "The text writes 2 seconds without saying whether it means 2 or 2.0 seconds.", "why": "There is no material difference."}
+      ]
+    },
+    {
+      "id": "clinic",
+      "request": "Build a clinic portal where patients read their own lab results. Staff may view any patient's record, and every staff view is written to an append-only audit log. Patients sign in with email and a one-time code. Results are encrypted at rest. Deleting an account must erase all of that patient's data within 30 days. Audit logs must be retained unchanged for 7 years. The portal is available in English and Spanish.",
+      "items": [
+        {"id": "erase-audit", "kind": "contradictions", "label": "decide", "text": "Erasing all patient data within 30 days conflicts with keeping audit logs that name the patient unchanged for 7 years.", "why": "Both are stated as musts and the text does not say which wins."},
+        {"id": "minors", "kind": "unsupported_claims", "label": "decide", "text": "Nothing says who may read results for a child or a patient who cannot consent, which determines who gets access to medical data.", "why": "Patients read their own results; proxies are absent from the text."},
+        {"id": "staff-spying", "kind": "contradictions", "label": "settled", "text": "Staff can open any record, and a view would leave no trace.", "why": "Every staff view is written to an append-only audit log."},
+        {"id": "plain-results", "kind": "unsupported_claims", "label": "settled", "text": "A stolen disk would expose lab results in readable form.", "why": "Results are encrypted at rest."},
+        {"id": "two-languages", "kind": "contradictions", "label": "noise", "text": "Offering both English and Spanish means the portal has two conflicting primary languages.", "why": "Two supported languages do not conflict."},
+        {"id": "email-word", "kind": "unsupported_claims", "label": "noise", "text": "The text says email rather than e-mail, which may confuse readers.", "why": "A spelling variant is not a material issue."}
+      ]
+    },
+    {
+      "id": "notes-sync",
+      "request": "Build a notes app that works offline and syncs when back online. Every edit is stored as an append-only operation with a device id and a logical clock, and all devices merge operations in the same deterministic order. Notes are end-to-end encrypted, so the server stores only ciphertext. Full-text search must run on the server. The free plan keeps 5 GB per user. Attachments are stored separately from note text.",
+      "items": [
+        {"id": "search-ciphertext", "kind": "contradictions", "label": "decide", "text": "Server-side full-text search cannot work when the server stores only ciphertext.", "why": "Both are stated and the text offers no reconciling mechanism."},
+        {"id": "lost-device", "kind": "unsupported_claims", "label": "decide", "text": "The design never says how a user who loses every device recovers their notes under end-to-end encryption.", "why": "Key recovery is material and absent."},
+        {"id": "edit-conflict", "kind": "contradictions", "label": "settled", "text": "Two offline devices editing the same note could end up with different final text.", "why": "All devices merge operations in the same deterministic order."},
+        {"id": "server-reads", "kind": "unsupported_claims", "label": "settled", "text": "The company could read note contents on its servers.", "why": "The server stores only ciphertext."},
+        {"id": "attachments-apart", "kind": "contradictions", "label": "noise", "text": "Attachments are stored separately from note text, so a note is in two places at once.", "why": "Separate storage of parts is ordinary design, not a conflict."},
+        {"id": "gb-gib", "kind": "unsupported_claims", "label": "noise", "text": "5 GB might mean 5 gigabytes rather than 5 gibibytes, which changes the quota by about 7 percent on a free plan.", "why": "An immaterial rounding question for a free quota."}
+      ]
+    },
+    {
+      "id": "uploads",
+      "request": "Build a video upload service. Browsers upload directly to object storage with a presigned URL that expires after 15 minutes. Files may be up to 50 GB. Each finished upload is scanned for malware before it becomes visible to anyone. A background worker transcodes videos into three resolutions. Thumbnails are generated by the same worker. Uploaders can see their own files in a list.",
+      "items": [
+        {"id": "url-expiry", "kind": "contradictions", "label": "decide", "text": "A 50 GB file cannot upload in 15 minutes on an ordinary connection, and no resumable or multipart upload is described.", "why": "The limit and the expiry conflict in practice and the text has no mechanism for it."},
+        {"id": "no-owner-rights", "kind": "unsupported_claims", "label": "decide", "text": "The design does not say how copyright complaints or illegal content are removed once videos are visible.", "why": "A material legal gap that the text does not address."},
+        {"id": "infected", "kind": "contradictions", "label": "settled", "text": "An infected file could be shown to other users right after upload.", "why": "Each upload is scanned before it becomes visible to anyone."},
+        {"id": "server-load", "kind": "unsupported_claims", "label": "settled", "text": "Large uploads would flow through the application servers and exhaust their bandwidth.", "why": "Browsers upload directly to object storage."},
+        {"id": "same-worker", "kind": "contradictions", "label": "noise", "text": "One worker producing both transcodes and thumbnails violates the idea of a background worker.", "why": "One worker doing two jobs is not a conflict."},
+        {"id": "three-res", "kind": "unsupported_claims", "label": "noise", "text": "Three resolutions is a number that the text does not derive from first principles.", "why": "A product choice needs no derivation."}
+      ]
+    },
+    {
+      "id": "sessions",
+      "request": "Build login for an internal admin tool. Sessions are stateless signed tokens valid for 12 hours, and no session data is stored on the server. Removing an employee must cut their access within 5 minutes. Passwords are hashed with Argon2id. Five failed logins lock the account for 15 minutes. Tokens are sent only in HttpOnly, Secure cookies. The tool runs in the EU region.",
+      "items": [
+        {"id": "revocation", "kind": "contradictions", "label": "decide", "text": "A stateless 12 hour token with no server-side state cannot be cut off within 5 minutes of removing an employee.", "why": "Both are stated and no denylist or short-lived refresh is described."},
+        {"id": "lockout-abuse", "kind": "unsupported_claims", "label": "decide", "text": "Anyone who knows an admin's username can keep that admin locked out, and the text gives no way to get back in during an incident.", "why": "The lockout rule creates this and no recovery path exists."},
+        {"id": "script-steal", "kind": "contradictions", "label": "settled", "text": "Injected page scripts could read the session token.", "why": "Tokens are sent only in HttpOnly cookies."},
+        {"id": "weak-hash", "kind": "unsupported_claims", "label": "settled", "text": "A database leak would expose fast, crackable password hashes.", "why": "Passwords are hashed with Argon2id."},
+        {"id": "twelve-five", "kind": "contradictions", "label": "noise", "text": "The 15 minute lockout and the 12 hour session use different time units.", "why": "Different units for different things conflict with nothing."},
+        {"id": "admin-word", "kind": "unsupported_claims", "label": "noise", "text": "The word internal is not defined precisely, so the tool may be misnamed.", "why": "The label has no material effect on the design."}
+      ]
+    },
+    {
+      "id": "reports",
+      "request": "Build a nightly sales report for a retailer with stores in Tokyo, London and New York. Sales are stored with UTC timestamps. The report must show each store's sales for its own local calendar day. The report is emailed to all managers at 06:00 UTC. It reruns safely, because each run replaces that day's rows. Currency is converted to USD with that day's closing rate. Charts use the company's brand colours.",
+      "items": [
+        {"id": "ny-unfinished", "kind": "contradictions", "label": "decide", "text": "At 06:00 UTC the New York store's local day is still running, so its calendar-day figures cannot be complete in the 06:00 UTC report.", "why": "New York is behind UTC, and nothing in the text delays or marks that store."},
+        {"id": "late-refund", "kind": "unsupported_claims", "label": "decide", "text": "Nothing says how refunds or corrections that arrive after a day is reported change that day's figures.", "why": "Material to sales numbers and absent; a rerun replaces rows but nothing says one happens."},
+        {"id": "double-rows", "kind": "contradictions", "label": "settled", "text": "Running the job twice after a failure would double the day's sales.", "why": "Each run replaces that day's rows."},
+        {"id": "which-rate", "kind": "unsupported_claims", "label": "settled", "text": "The design does not fix which exchange rate applies to a day's sales.", "why": "That day's closing rate is stated."},
+        {"id": "utc-local", "kind": "contradictions", "label": "noise", "text": "Storing timestamps in UTC while reporting local days is contradictory.", "why": "UTC storage with local presentation is standard and compatible."},
+        {"id": "brand-colours", "kind": "unsupported_claims", "label": "noise", "text": "The text spells colours the British way although one store is in New York.", "why": "A spelling preference has no effect."}
+      ]
+    },
+    {
+      "id": "firmware",
+      "request": "Build over-the-air firmware updates for 200,000 door locks. Images are signed, and the lock verifies the signature before installing. Each lock has two firmware slots and rolls back automatically if the new image fails to boot. Updates roll out to 1 percent of locks first and stop automatically if failures rise. Locks run on batteries and connect through a home hub. Locks must apply security fixes within 24 hours of release. A lock only wakes its radio for 30 seconds once per week to save battery.",
+      "items": [
+        {"id": "weekly-radio", "kind": "contradictions", "label": "decide", "text": "A lock that wakes its radio once a week cannot apply a security fix within 24 hours of release.", "why": "A 7 day cycle exceeds 24 hours and no push wake is described."},
+        {"id": "low-battery", "kind": "unsupported_claims", "label": "decide", "text": "The text does not say what happens if the battery dies during an update, or whether updates are blocked at low charge, while the lock holds someone's door.", "why": "Rollback covers failed boots; low battery behaviour is absent and material."},
+        {"id": "bricked", "kind": "contradictions", "label": "settled", "text": "A bad image that fails to boot would brick locks in the field.", "why": "Two slots with automatic rollback on boot failure."},
+        {"id": "fake-image", "kind": "unsupported_claims", "label": "settled", "text": "An attacker on the home network could install modified firmware.", "why": "Images are signed and verified before installing."},
+        {"id": "percent-count", "kind": "contradictions", "label": "noise", "text": "The fleet is given as 200,000 locks but the rollout is given as a percentage, so the units disagree.", "why": "One percent of 200,000 is simply 2,000."},
+        {"id": "door-word", "kind": "unsupported_claims", "label": "noise", "text": "The text says door locks without saying whether the doors are wooden or metal, which firmware needs to know.", "why": "Door material has no bearing on firmware updates."}
+      ]
+    },
+    {
+      "id": "rate-limit",
+      "request": "Add a rate limiter to a public API running on 12 stateless servers. Each customer gets 100 requests per minute in total. Each server keeps its counters in its own memory, with no shared store. Over-limit requests get HTTP 429 with a Retry-After header. Paying customers get a higher limit read from their plan. Health checks are exempt from limiting. Limits are configured in a YAML file.",
+      "items": [
+        {"id": "local-counters", "kind": "contradictions", "label": "decide", "text": "Per-server memory counters on 12 servers cannot enforce a 100 per minute total per customer; a customer could reach up to 1,200.", "why": "The total limit and the no shared store rule conflict."},
+        {"id": "identity", "kind": "unsupported_claims", "label": "decide", "text": "The design does not say how a customer is identified on a public API, so limits may be applied to the wrong party or be trivially evaded.", "why": "The customer key is material and absent."},
+        {"id": "client-backoff", "kind": "contradictions", "label": "settled", "text": "Clients that hit the limit have no signal for when to try again.", "why": "HTTP 429 carries a Retry-After header."},
+        {"id": "probe-limited", "kind": "unsupported_claims", "label": "settled", "text": "Load balancer health checks could be rate limited and take servers out of rotation.", "why": "Health checks are exempt from limiting."},
+        {"id": "higher-limit", "kind": "contradictions", "label": "noise", "text": "Paying customers having a higher limit contradicts the stated 100 requests per minute, since one number cannot apply to everyone.", "why": "A default with a plan-based higher limit is explicitly described."},
+        {"id": "yaml-format", "kind": "unsupported_claims", "label": "noise", "text": "YAML is one of several possible file formats and the text does not prove it is the best.", "why": "A format choice needs no proof and is immaterial."}
+      ]
+    }
+  ]
+}

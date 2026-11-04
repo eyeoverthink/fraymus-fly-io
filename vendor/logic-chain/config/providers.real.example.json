@@ -1,0 +1,21 @@
+{
+  "slots": [
+    {"name": "OpenAI", "kind": "openai", "model": "YOUR_OPENAI_MODEL", "key_env": "OPENAI_API_KEY"},
+    {"name": "Claude", "kind": "anthropic", "model": "YOUR_CLAUDE_MODEL", "key_env": "ANTHROPIC_API_KEY"},
+    {"name": "Gemini", "kind": "gemini", "model": "YOUR_GEMINI_MODEL", "key_env": "GEMINI_API_KEY"},
+    {"name": "Grok", "kind": "openai_compatible", "model": "YOUR_GROK_MODEL", "url": "https://api.x.ai/v1/chat/completions", "key_env": "XAI_API_KEY"},
+    {"name": "Ollama Local", "kind": "ollama", "model": "YOUR_INSTALLED_MODEL", "url": "http://127.0.0.1:11434/api/chat"},
+    {"name": "Local Second", "kind": "ollama", "model": "YOUR_INSTALLED_MODEL", "url": "http://127.0.0.1:11434/api/chat"},
+    {"name": "Compatible 7", "kind": "openai_compatible", "model": "YOUR_MODEL", "url": "http://127.0.0.1:8000/v1/chat/completions"},
+    {"name": "Compatible 8", "kind": "openai_compatible", "model": "YOUR_MODEL", "url": "http://127.0.0.1:8001/v1/chat/completions"}
+  ],
+  "passes": 2,
+  "timeout_seconds": 180,
+  "max_elapsed_seconds": 18000,
+  "max_output_tokens": 1500,
+  "retries": 1,
+  "max_context_chars": 90000,
+  "num_ctx": 8192,
+  "synthesize": true,
+  "allow_remote": false
+}

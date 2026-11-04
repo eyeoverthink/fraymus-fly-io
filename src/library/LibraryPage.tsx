@@ -9,8 +9,8 @@ type Item = {
 type List = { items: Item[]; total: number; facets: { types: Record<string, number>; agents: Record<string, number> } }
 
 const TYPES: [string, string][] = [['image', 'Images'], ['media', 'Video/audio'], ['chat', 'Chats'], ['evolve', 'Evolve jobs'], ['fossil', 'Fossils'], ['pattern', 'Patterns'],
-  ['memory', 'Memories'], ['akashic', 'Akashic'], ['canvas', 'Canvas'], ['buyer', 'Buyer outputs'], ['pipeline', 'Pipelines']]
-const ICON: Record<string, string> = { image: '🖼', media: '🎞', chat: '💬', evolve: '🧬', fossil: '🦴', pattern: '📐', memory: '🧠', akashic: '🕸', canvas: '🧩', buyer: '🛍', pipeline: '🎬' }
+  ['memory', 'Memories'], ['akashic', 'Akashic'], ['canvas', 'Canvas'], ['buyer', 'Buyer outputs'], ['pipeline', 'Pipelines'], ['logic', 'Logic Chain']]
+const ICON: Record<string, string> = { image: '🖼', media: '🎞', chat: '💬', evolve: '🧬', fossil: '🦴', pattern: '📐', memory: '🧠', akashic: '🕸', canvas: '🧩', buyer: '🛍', pipeline: '🎬', logic: '⛓' }
 const fmtBytes = (n: number) => (n > 1e9 ? `${(n / 1e9).toFixed(2)} GB` : n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n > 1e3 ? `${Math.round(n / 1e3)} KB` : `${n} B`)
 const btn = { fontSize: 12, background: '#1a1a1a', color: '#e5e5e5', border: '1px solid #333', padding: '4px 10px', borderRadius: 6, cursor: 'pointer' } as const
 const input = { background: '#111', color: '#e5e5e5', border: '1px solid #333', borderRadius: 6, padding: '5px 8px', fontSize: 12 } as const

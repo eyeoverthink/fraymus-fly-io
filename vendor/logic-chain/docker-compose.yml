@@ -1,0 +1,21 @@
+# docker compose up --build   then open http://127.0.0.1:8765
+# Keys come from .env on the server side only; the browser never sees them.
+services:
+  logic-chain:
+    build: .
+    ports:
+      # Keep the host port at 8765: the server only accepts Host 127.0.0.1:8765 or localhost:8765.
+      - "127.0.0.1:8765:8765"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FRAYMUS_OLLAMA_URL: ${FRAYMUS_OLLAMA_URL:-http://host.docker.internal:11434}
+      FRAYMUS_LOCAL_HOSTS: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Runs, skill packages, provider settings and the signing identity live here.
+      - fraymus-data:/data
+volumes:
+  fraymus-data:

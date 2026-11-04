@@ -36,6 +36,17 @@ Recommended / optional:
 - `VITE_CLERK_PUBLISHABLE_KEY` (build arg: `fly deploy --build-arg VITE_CLERK_PUBLISHABLE_KEY=...`)
 - `REPLICATE_API_TOKEN` (real AI upscale; otherwise a lanczos3 resize)
 
+FRAYMUS Logic Chain (all optional; with none set, runs are MOCK and signed by a labelled LOCAL KEY, see docs/LOGIC-CHAIN.md):
+
+- `XAI_API_KEY` (optional: the existing `PROMPT_LLM_API_KEY` is reused for xAI because `PROMPT_LLM_BASE_URL` is api.x.ai)
+- `GEMINI_API_KEY`
+- `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` above are reused for the OpenAI seat (`LOGIC_CHAIN_OPENAI_MODEL` overrides the model)
+- `FRAYMUS_IDENTITY_SEED` (64 hex chars, your Fraymus Ed25519 seed) so runs are signed by your identity instead of a local key
+- Caps (plain env, not secret): `LOGIC_CHAIN_MAX_RUN_CENTS` (default 100), `LOGIC_CHAIN_MAX_PLAN_CALLS` (default 60)
+
+The sidecar runs inside the same machine (child process on 127.0.0.1). It needs no `[processes]` entry, service or port,
+and keeps its runs on the volume at `/data/logic-chain`.
+
 Override in `fly.toml` [env] if needed: `PROMPT_LLM`, `PROMPT_LLM_BASE_URL`, `PROMPT_LLM_MODEL`.
 
 ## CLI

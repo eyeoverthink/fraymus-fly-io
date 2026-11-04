@@ -273,6 +273,29 @@ export async function getRun(userId: string, id: string, full = false) {
   const run = (await lc(`/api/runs/${encodeURIComponent(id)}`)).body
   return view(load(id)!, run?.id ? run : undefined, full)
 }
+/** One-time (idempotent) migration: rows finalized before the FAILED label existed (Fly v12) kept a stale stored label,
+ *  e.g. a live run whose every call failed still read LIVE in the run list. Recompute each finished run's label from its
+ *  stages with labelOf (the same logic the single-run view uses) and rewrite logic_runs.label and logic_skills.label when
+ *  they differ. Runs the sidecar no longer has are left as they are. Returns the ids that changed. */
+export async function relabelStoredRuns(fetchRun: (id: string) => Promise<any> = async (id) => { const r = await lc(`/api/runs/${encodeURIComponent(id)}`); return r.status === 200 ? r.body : null }) {
+  const rows = db.prepare(`select * from logic_runs where status not in ('running','finalizing')`).all() as Row[]
+  const changed: { id: string; from: string; to: string }[] = []
+  for (const r of rows) {
+    let run: any = null
+    try { run = await fetchRun(r.id) } catch { continue }
+    if (!run?.id && !Array.isArray(run?.stages)) continue
+    const to = labelOf(run, r.requested_mode)
+    if (to === r.label) continue
+    db.prepare('update logic_runs set label=? where id=?').run(to, r.id)
+    db.prepare('update logic_skills set label=? where run_id=?').run(to, r.id)
+    changed.push({ id: r.id, from: r.label, to })
+  }
+  if (changed.length) {
+    console.log(`[logic-chain] relabelled ${changed.length} stored run(s): ${changed.map((c) => `${c.id} ${c.from}->${c.to}`).join(', ')}`)
+    appendRecord('logic.run.relabel', { runs: changed }, { agentId: AGENT })
+  }
+  return changed
+}
 export const listRuns = (userId: string) => (db.prepare('select * from logic_runs where user_id=? order by created_at desc limit 50').all(userId) as Row[]).map((r) => view(r))
 
 /** The run's signed chain checked by the vendored verifier, plus its skill package when one was exported. */
@@ -425,7 +448,10 @@ export function initLogicChain() {
   registerTools(tools)
   if (!enabled()) { side.error = 'disabled (LOGIC_CHAIN=off)'; return }
   process.once('exit', stopSidecar)
-  startSidecar().then(() => { if (db.prepare("select 1 from logic_runs where status in ('running','finalizing') limit 1").get()) poll() })
+  startSidecar().then(async () => {
+    if (db.prepare("select 1 from logic_runs where status in ('running','finalizing') limit 1").get()) poll()
+    if (side.ready) await relabelStoredRuns().catch((e) => console.error('[logic-chain] relabel', e?.message))
+  })
     .catch((e) => { side.error = String(e?.message || e); console.error('[logic-chain]', side.error) })
 }
 

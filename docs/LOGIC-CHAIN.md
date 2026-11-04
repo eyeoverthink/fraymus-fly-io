@@ -64,12 +64,19 @@ curl -s "$URL/api/logic-chain/runs/<id>/verify" -H "Authorization: Bearer $TOKEN
 |---|---|---|
 | Who answers each stage | upstream's labelled demo fixtures | real models through the server's provider keys |
 | Network / cost | none / $0 | provider calls, capped |
-| Label | `MOCK`, on the run, document, every Library title and tag, and skill | `LIVE` only when **every** stage used a real provider. Any fixture stage makes it `MIXED (part MOCK)` |
+| Label | `MOCK`, on the run, document, every Library title and tag, and skill | `LIVE` only when **every** stage used a real provider **and** real-provider stages actually completed. Any fixture stage makes it `MIXED (part MOCK)`. A finished live run where no stage completed (every call failed) is `FAILED` |
 | Signing, verify, Library, skill package | real (same code path) | real |
 | Needs | nothing | `mode: "live"`, `approveSpend: true`, the workspace **owner**, and at least one provider key |
 
 The label comes from the stages the chain actually recorded, not from what was requested. A mock run can never be
-shown as LIVE. A run with no stages yet shows `PENDING`.
+shown as LIVE. A live run with no completed stage yet shows `PENDING`. A live run that finishes (or has every stage
+fail) without a single completed real-provider stage is labelled `FAILED` on the run, `/verify`, Library titles
+(`[FAILED] …`) and tags, because no model output exists. Its signed chain still verifies: it is an honest record of
+the failed calls.
+
+**HTTPS from the sidecar.** The Python sidecar's provider calls use the system CA store. The image installs
+`ca-certificates` and sets `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` (passed through the sidecar's env
+allow-list). Release v12 lacked the package and every live call failed with `SSL: CERTIFICATE_VERIFY_FAILED`.
 
 **Spending caps** (live): `LOGIC_CHAIN_MAX_RUN_CENTS` (default **100 = $1.00**), `LOGIC_CHAIN_MAX_PLAN_CALLS` (default
 **60**), `LOGIC_CHAIN_MAX_SECONDS` (default 3600). A request can lower them (`maxUsd`, `maxPlanCalls`) but never raise
@@ -105,7 +112,7 @@ items of type **`logic`** (Library tab → "Logic Chain"):
 - **Skill package**: `skill.json` (the manifest), `CONTRACT.md` and `tests/test_acceptance.py`.
 
 Each item's `meta` has `kind`, `label`, `runId`, `signer`, `head`, `verified` and `links` (API, verify, document,
-run.json, and the other two Library ids). Titles and tags carry `MOCK`, `MIXED` or `LIVE`. The episodic record (`/api/memory/record`) gets
+run.json, and the other two Library ids). Titles and tags carry `MOCK`, `MIXED`, `LIVE` or `FAILED`. The episodic record (`/api/memory/record`) gets
 `logic.run.start`, `logic.run.done` and `logic.skill.agents` events.
 
 **Skills** are registered with `agents: []`. No agent can see them until the owner selects agents with

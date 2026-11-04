@@ -130,7 +130,7 @@ function pythonVersion(): string | null {
 // Only what the chain needs. Workspace tokens, Shopify/Resend/Clerk secrets etc. never reach the Python process.
 export function sidecarEnv(port: number, withKeys = true) {
   const e = process.env, out: Record<string, string> = {}
-  for (const k of ['PATH', 'LANG', 'LC_ALL', 'TZ', 'SYSTEMROOT']) if (e[k]) out[k] = e[k]!
+  for (const k of ['PATH', 'LANG', 'LC_ALL', 'TZ', 'SYSTEMROOT', 'SSL_CERT_FILE', 'SSL_CERT_DIR']) if (e[k]) out[k] = e[k]!
   Object.assign(out, { HOME: chainDataDir(), PYTHONUNBUFFERED: '1', PYTHONDONTWRITEBYTECODE: '1', FRAYMUS_HOST: '127.0.0.1', FRAYMUS_PORT: String(port), FRAYMUS_DATA_DIR: chainDataDir(), FRAYMUS_SERVER_TOKEN: side.token })
   // Ollama is off by default on Fly (nothing listens); a configured OLLAMA_HOST is passed through for local installs.
   out.FRAYMUS_OLLAMA_URL = (e.LOGIC_CHAIN_OLLAMA_URL || e.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '')
@@ -202,13 +202,21 @@ create table if not exists logic_skills(id text primary key, run_id text not nul
 type Row = { id: string; user_id: string; objective: string; requested_mode: string; mode: string | null; label: string; status: string; signer: string | null; verified: number | null; lib: string | null; skill_id: string | null; error: string | null; caps: string; created_at: number; updated_at: number }
 const load = (id: string, userId?: string) => db.prepare(`select * from logic_runs where id=?${userId ? ' and user_id=?' : ''}`).get(...(userId ? [id, userId] : [id])) as Row | undefined
 
-/** MOCK when every stage ran on demo fixtures. Never LIVE unless every stage used a real provider. */
+/** MOCK when every stage ran on demo fixtures. LIVE only when real-provider stages actually completed and no stage was
+ *  a fixture. A live run in which no real-provider stage completed (every call failed, or it stopped before any finished)
+ *  is FAILED, never LIVE: no model output exists to show. Until one completes, an unfinished live run is PENDING. */
 export function labelOf(run: any, requested?: string) {
-  const kinds = new Set<string>((run?.stages || []).map((s: any) => s.kind || 'demo'))
+  const stages: any[] = run?.stages || []
+  const kinds = new Set<string>(stages.map((s: any) => s.kind || 'demo'))
   if (run?.mode === 'mock' || (kinds.size && [...kinds].every((k) => k === 'demo'))) return 'MOCK'
+  const realDone = stages.filter((s: any) => (s.kind || 'demo') !== 'demo' && s.status === 'complete').length
+  if (!realDone) {
+    const allFailed = stages.length > 0 && stages.every((s: any) => s.status === 'failed')
+    if (allFailed || FINISHED.includes(run?.status)) return 'FAILED'
+    return requested === 'mock' ? 'MOCK' : 'PENDING'
+  }
   if (run?.mode === 'mixed' || kinds.has('demo')) return 'MIXED (part MOCK)'
-  if (run?.mode === 'real' || kinds.size) return 'LIVE'
-  return requested === 'mock' ? 'MOCK' : 'PENDING'
+  return 'LIVE'
 }
 const links = (id: string) => ({ api: `/api/logic-chain/runs/${id}`, verify: `/api/logic-chain/runs/${id}/verify`, document: `/api/logic-chain/runs/${id}/document`, runJson: `/api/logic-chain/runs/${id}?full=1` })
 function view(r: Row, run?: any, full = false) {

@@ -48,6 +48,7 @@ All settings are environment variables; [.env.example](.env.example) lists every
 | Server | `PORT` (3001), `HOST` (0.0.0.0), `DATA_DIR` (`./data`, `/data` in Docker/Fly), `PUBLIC_URL`, `CORS_ORIGIN`; compose: `HOST_PORT`, `HOST_BIND` |
 | Auth | `CLERK_SECRET_KEY`, `VITE_CLERK_PUBLISHABLE_KEY`, `WORKSPACE_ACCESS_TOKEN`, `WORKSPACE_AUTH`, `OWNER_USER_IDS`, `MCP_ADMIN_TOKEN` |
 | LLMs | `LLM_PROVIDERS`, `OLLAMA_*`, `GROQ_*`, `OPENAI_BASE_URL/API_KEY/MODEL`, `PROMPT_LLM*`, `EMBED_*` |
+| Organism stage 1 | `ORGANISM_TELEMETRY`, `MEMORY_NGRAM` (both default off; `on` / `1` / `true` to opt in) |
 | Images | `HF_TOKEN`, `HF_FLUX_*`, `REPLICATE_API_TOKEN`, `REQUIRE_AI_UPSCALE` |
 | Shopify / buyers | `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_PACK_PRODUCT_ID`, `SHOPIFY_CREDITS_PER_PACK`, `RESEND_API_KEY`, `MAIL_FROM`, `BUYER_PIPELINE_STRICT`, `FREE_CREDITS` |
 | Billing | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_METER_EVENT_NAME` |

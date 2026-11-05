@@ -5,6 +5,7 @@ import { createReadStream, existsSync } from 'node:fs'
 import { registerTools, type Tool } from '../agent/tools'
 import { appendRecord, tailRecord, verifyRecord, verifyText } from './record'
 import { backfill, deleteDoc, embedStatus, formatHits, indexDoc, retrieve } from './semantic'
+import { ngramStatus } from './ngram'
 import { deleteDecision, deleteEntity, queryAkashic, recordDecision, relate, stateSummary, upsertEntity } from './akashic'
 import { deleteEvolve, deleteFossil, deletePattern, getEvolve, getFossil, listEvolve, listFossils, listPatterns, patternsBlock, startEvolve, waitEvolve } from './evolve'
 import { runSandboxed, sandboxLevel } from './sandbox'
@@ -98,7 +99,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
     return tailRecord(uid(req), Math.min(Number(q.limit) || 50, 500), q.kind ? String(q.kind) : undefined)
   })
   // Semantic store
-  app.get('/api/memory/status', async () => ({ embeddings: embedStatus(), record: verifyRecord(), sandbox: sandboxLevel() }))
+  app.get('/api/memory/status', async () => ({ embeddings: embedStatus(), ngram: ngramStatus(), record: verifyRecord(), sandbox: sandboxLevel() }))
   app.get('/api/memory/search', async (req) => {
     const q = req.query as any
     return retrieve(uid(req), q.agentId ? String(q.agentId) : null, String(q.q || ''), { limit: Math.min(Number(q.limit) || 8, 30), excludeThreadId: q.excludeThreadId ? String(q.excludeThreadId) : undefined })

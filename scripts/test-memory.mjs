@@ -76,7 +76,7 @@ class Visitor {
   async memory() { return (await fetch(this.s.base + '/public/memory', { headers: this.cookie ? { cookie: this.cookie } : {} })).json() }
 }
 
-const s = await boot()
+const s = await boot({ ORGANISM_TELEMETRY: '', MEMORY_NGRAM: '' })
 let ownerThreadA, fossilId
 try {
   // --- auth gate on new routes
@@ -87,6 +87,7 @@ try {
   }
   const st = await api(s, '/api/memory/status')
   ok(st.status === 200 && st.body.record.ok, 'status: record chain ok')
+  ok(st.body.ngram?.enabled === false && st.body.ngram?.candidate === true, 'ngram candidate off when MEMORY_NGRAM is absent')
 
   // --- owner memory across threads
   const a = await agentSay(s, 'remember that my build codename is zebra-42')
@@ -98,6 +99,7 @@ try {
   ok(Array.isArray(mem.body) ? mem.body.some((m) => m.text.includes('zebra-42')) : JSON.stringify(mem.body).includes('zebra-42'), 'owner: memory_save still writes /api/agent/memories')
   const srch = await api(s, '/api/memory/search?q=codename')
   ok(srch.body.some((h) => h.text.includes('zebra-42')), 'owner: /api/memory/search finds the fact')
+  ok(srch.body.every((h) => !(h.via || []).includes('ngram')), 'owner: search does not use the ngram candidate by default')
 
   // --- akashic
   const e1 = await api(s, '/api/akashic/entities', { method: 'POST', body: JSON.stringify({ name: 'fraymus-fly-io', type: 'project', summary: 'Fly app with persistent memory' }) })
@@ -178,6 +180,21 @@ try {
   const fg = await fetch(s.base + '/public/memory', { method: 'DELETE', headers: { cookie: v2.cookie } })
   ok(fg.status === 200 && !(await v2.memory()).visitor, 'public: forget-me deletes visitor memory')
 } finally { await s.stop() }
+
+// --- explicit opt-in flags on the existing status routes
+{
+  const r = await boot({ ORGANISM_TELEMETRY: 'on', MEMORY_NGRAM: 'true' })
+  try {
+    const ag = await api(r, '/api/agent/status')
+    ok(ag.status === 200 && ag.body.organismTelemetry === true, 'ORGANISM_TELEMETRY=on sets the existing agent status flag')
+    const ms = await api(r, '/api/memory/status')
+    ok(ms.status === 200 && ms.body.ngram?.enabled === true && ms.body.ngram?.candidate === true, 'MEMORY_NGRAM=true reports the candidate enabled')
+    const empty = await api(r, '/api/memory/search?q=')
+    ok(Array.isArray(empty.body) && empty.body.length === 0, 'empty search stays empty when the ngram candidate is on')
+    const no = await fetch(r.base + '/api/agent/status')
+    ok(no.status === 401, 'organism flag does not open agent status')
+  } finally { await r.stop(); rmSync(r.dataDir, { recursive: true, force: true }) }
+}
 
 // --- retention: expired visitors are purged on boot
 {

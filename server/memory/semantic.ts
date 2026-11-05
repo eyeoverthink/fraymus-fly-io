@@ -2,6 +2,7 @@
 // OpenAI-compatible /embeddings endpoint answers (EMBED_BASE_URL / EMBED_API_KEY / EMBED_MODEL; EMBED_BACKEND=off disables).
 // Scopes: 'agent' entries are seen only by that agent; 'shared' entries are seen by every agent of the same user.
 import { db, now } from '../agent/db'
+import { NGRAM_SCAN_LIMIT, ngramRankEnabled, rankNgrams } from './ngram'
 
 db.exec(`
 create table if not exists mem_docs(id integer primary key autoincrement, user_id text not null, scope text not null, agent_id text, thread_id text, kind text, text text not null, source text, embedding blob, created_at integer);
@@ -123,6 +124,16 @@ export async function retrieve(userId: string, agentId: string | null, query: st
       const scored = rows.map((r) => ({ r, s: cosine(qv[0], fromBlob(r.embedding)) })).filter((x) => x.s > 0.3).sort((a, b) => b.s - a.s).slice(0, limit * 3)
       add(scored.map((x) => { const { embedding, ...rest } = x.r; return rest }), 'vector')
     }
+  }
+  // Opt-in lexical candidate. Absent MEMORY_NGRAM does not read this branch. Not a replacement for FTS or embeddings.
+  if (ngramRankEnabled() && query.trim()) {
+    try {
+      const rows = db.prepare(`select d.id,d.text,d.kind,d.scope,d.agent_id,d.thread_id,d.created_at from mem_docs d
+        where d.user_id=? ${scopeSql} ${exSql} order by d.id desc limit ?`).all(...params([NGRAM_SCAN_LIMIT])) as any[]
+      const rankedN = rankNgrams(query, rows.map((r) => ({ id: r.id as number, text: r.text })), { limit: limit * 3 })
+      const byId = new Map(rows.map((r) => [r.id as number, r]))
+      add(rankedN.map((h) => byId.get(h.id as number)).filter(Boolean), 'ngram')
+    } catch (e: any) { console.error('[memory] ngram query failed:', e.message) }
   }
   return [...ranked.values()].sort((a, b) => b.rrf - a.rrf).slice(0, limit).map(({ row, rrf, via }) => ({
     id: row.id, text: row.text, kind: row.kind, scope: row.scope, agentId: row.agent_id, threadId: row.thread_id, createdAt: row.created_at, score: Number(rrf.toFixed(4)), via

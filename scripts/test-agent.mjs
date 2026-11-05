@@ -20,6 +20,7 @@ const toolMsgs = (t, name) => t.messages.filter((m) => m.role === 'tool' && m.na
 
 const st = await api('/api/agent/status')
 assert(st.mockFallback === true, 'expected mock fallback (start server with LLM_PROVIDERS=none)')
+assert(st.organismTelemetry === false, 'organism telemetry defaults off')
 const agents = await fetch(BASE + '/api/agents').then((r) => r.json())
 assert(agents.length >= 15 && agents.some((a) => a.id === 'concierge') && !agents[0].systemPrompt, 'agents listed without prompts')
 console.log('1 status/agents ok', agents.length, 'agents,', st.tools.length, 'tools')

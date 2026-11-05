@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch, errorText } from '../lib/api'
 import { toast } from '../components/Toasts'
+import OrganismTelemetry from '../organism/OrganismTelemetry'
+import { showOrganismTelemetry } from '../organism/telemetry'
 
 type Agent = { id: string; name: string; role?: string; description?: string; greeting?: string; custom?: boolean }
 type Msg = { id: number; role: string; content: string; tool_calls?: { id: string; name: string; arguments: any }[]; name?: string }
@@ -115,6 +117,16 @@ export default function AgentsPage() {
           <div style={{ background: '#78350f', color: '#fde68a', padding: '6px 16px', fontSize: 11 }}>
             No language model connected - replies come from a basic offline stand-in. Start Ollama or set GROQ_API_KEY (see DEPLOY.md).
           </div>
+        )}
+        {showOrganismTelemetry(status) && (
+          <OrganismTelemetry
+            agents={agents.length}
+            tools={Array.isArray(status.tools) ? status.tools.length : 0}
+            conversations={threads.length}
+            providers={Array.isArray(status.providers) ? status.providers : []}
+            mockFallback={!!status.mockFallback}
+            runStatus={data?.run?.status || 'idle'}
+          />
         )}
         <div style={{ flex: 1, overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
           {!data && <div style={{ color: '#888', margin: 'auto', textAlign: 'center' }}><h3 style={{ color: '#e5e5e5' }}>{agent?.name}</h3>{agent?.greeting || agent?.description}</div>}

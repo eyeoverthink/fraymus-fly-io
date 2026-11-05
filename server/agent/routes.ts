@@ -6,6 +6,7 @@ import { mcpStatus, mcpServers, importServers, removeServer } from './mcp'
 import {
   listAgents, getAgent, saveAgentManifest, resetAgentManifest, saveCustomAgent, startRun, decideApproval, listThreads, getThread, deleteThread, listMemories, deleteMemory
 } from './runtime'
+import { organismTelemetryEnabled } from '../lib/flags'
 
 const fail = (reply: any, e: any, code = 400) => reply.status(code).send({ error: e.message || String(e) })
 
@@ -13,7 +14,8 @@ export function registerAgentRoutes(app: FastifyInstance) {
   app.get('/api/agent/status', async () => ({
     ...(await providerStatus()),
     mcp: mcpStatus(),
-    tools: allTools().map((t) => ({ name: t.name, risk: t.risk, description: t.description }))
+    tools: allTools().map((t) => ({ name: t.name, risk: t.risk, description: t.description })),
+    organismTelemetry: organismTelemetryEnabled()
   }))
 
   app.get('/api/agents', async (req) =>

@@ -17,6 +17,7 @@
     "test:shopify": "node scripts/test-shopify.mjs",
     "test:gate": "node scripts/test-access-gate.mjs",
     "test:memory": "node scripts/test-memory.mjs",
+    "test:organism": "tsx scripts/test-organism.ts && tsx scripts/test-ngram.ts",
     "test:library": "node scripts/test-library.mjs",
     "test:shorts": "npx tsx scripts/test-voice.ts && node scripts/test-shorts.mjs",
     "test:voice": "npx tsx scripts/test-voice.ts",

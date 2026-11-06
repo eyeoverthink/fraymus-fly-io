@@ -41,7 +41,7 @@ export function topoSort(nodes: any[], edges: any[]): string[] {
 
 export type PipelineResult = {
   status: 'success' | 'failed'
-  results: Record<string, { type: string; durationMs: number; error?: string; text?: string; imageUrl?: string; engine?: string; mocked?: boolean }>
+  results: Record<string, { type: string; durationMs: number; error?: string; text?: string; imageUrl?: string; engine?: string; mocked?: boolean; model?: string; costMode?: string; watermark?: boolean; kind?: string; attempts?: { provider: string; status: string; durationMs: number }[] }>
   imageUrl?: string
   html?: string
   durationMs: number
@@ -77,11 +77,12 @@ export async function runPipeline(nodes: any[], edges: any[], opts: { prompt?: s
         texts[id] = r.text = out.text
       } else if (k === 'flux') {
         const prompt = upstreamText || opts.prompt || node.data?.prompt || 'mirror selfie'
-        const { png, mocked, engine } = await runFlux(prompt)
-        r.engine = mocked ? 'placeholder' : engine || 'hf-flux'; r.mocked = mocked
-        if (opts.strict && mocked) throw new Error('Image model not configured (set HF_TOKEN)')
-        buffers[id] = png
-        r.imageUrl = await saveImage(png)
+        const out = await runFlux(prompt, { strict: !!opts.strict })
+        r.engine = out.engine; r.mocked = out.mocked; r.model = out.model
+        r.costMode = out.costMode; r.watermark = !!out.watermark; r.attempts = out.attempts
+        if (opts.strict && out.mocked) throw new Error('Paid run stopped: image was a placeholder, not a real provider. This run should be refunded.')
+        buffers[id] = out.png
+        r.imageUrl = await saveImage(out.png)
       } else if (k === 'remover') {
         if (!upstreamImg) throw new Error('Remover needs an input image')
         const { png, engine } = await runRemover(upstreamImg)
@@ -91,11 +92,11 @@ export async function runPipeline(nodes: any[], edges: any[], opts: { prompt?: s
         r.imageUrl = await saveImage(png)
       } else if (k === 'upscaler') {
         if (!upstreamImg) throw new Error('Upscaler needs an input image')
-        const { png, engine } = await runUpscaler(upstreamImg, Number(node.data?.scale) || 4)
-        r.engine = engine
-        if (opts.strict && process.env.REQUIRE_AI_UPSCALE === '1' && engine !== 'replicate-real-esrgan') throw new Error('AI upscaler not available')
-        buffers[id] = png
-        r.imageUrl = await saveImage(png)
+        const up = await runUpscaler(upstreamImg, Number(node.data?.scale) || 4)
+        r.engine = up.engine; r.kind = up.kind
+        // Sharp is a resize, not AI upscaling. Missing Replicate must not fail a paid image run.
+        buffers[id] = up.png
+        r.imageUrl = await saveImage(up.png)
       } else if (k === 'html') {
         const src = incoming.map((s) => results[s]?.imageUrl).filter(Boolean).pop()
         imageUrl = src

@@ -46,7 +46,7 @@ export const FREE_REGISTRY = {
     cost: 'FREE - sharp local, no API',
     inputs: [{ name: 'imageUrl', type: 'image', required: true }, { name: 'scale', type: 'number', default: 4 }],
     outputs: [{ name: 'imageUrl', type: 'image', description: '4K upscaled image' }],
-    docs: 'Sharp lanczos3 4x. For true Real-ESRGAN, swap with replicate.com/xinntao/realesrgan free tier',
+    docs: 'Sharp lanczos3 resize by default, not AI upscaling. Real-ESRGAN runs only when ENABLE_PAID_REPLICATE=1 and REPLICATE_API_TOKEN are both set.',
     free: true
   },
   'html-preview': {

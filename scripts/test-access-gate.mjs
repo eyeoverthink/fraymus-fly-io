@@ -19,7 +19,7 @@ async function boot(extra) {
   const dataDir = mkdtempSync(join(tmpdir(), 'gate-test-'))
   const env = { ...process.env, PORT: port, HOST: '127.0.0.1', DATA_DIR: dataDir, LLM_PROVIDERS: 'none', SCHEDULER: 'off',
     SHOPIFY_WEBHOOK_SECRET: SECRET, NODE_ENV: 'test', WORKSPACE_AUTH: '', WORKSPACE_ACCESS_TOKEN: '',
-    GROQ_API_KEY: '', OPENAI_API_KEY: '', OPENAI_BASE_URL: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', ...extra }
+    GROQ_API_KEY: '', OPENAI_API_KEY: '', OPENAI_BASE_URL: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', HF_TOKEN: '', IMAGE_PROVIDERS: 'placeholder', ENABLE_PAID_REPLICATE: '', ...extra }
   const p = spawn('npx', ['tsx', 'server/index.ts'], { env, stdio: process.env.DEBUG ? 'inherit' : 'ignore' })
   const base = `http://127.0.0.1:${port}`
   for (let i = 0; i < 80; i++) { try { if ((await fetch(base + '/health')).ok) break } catch {} await new Promise((r) => setTimeout(r, 500)) }

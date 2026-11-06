@@ -49,7 +49,7 @@ All settings are environment variables; [.env.example](.env.example) lists every
 | Auth | `CLERK_SECRET_KEY`, `VITE_CLERK_PUBLISHABLE_KEY`, `WORKSPACE_ACCESS_TOKEN`, `WORKSPACE_AUTH`, `OWNER_USER_IDS`, `MCP_ADMIN_TOKEN` |
 | LLMs | `LLM_PROVIDERS`, `OLLAMA_*`, `GROQ_*`, `OPENAI_BASE_URL/API_KEY/MODEL`, `PROMPT_LLM*`, `EMBED_*` |
 | Organism stage 1 | `ORGANISM_TELEMETRY`, `MEMORY_NGRAM` (both default off; `on` / `1` / `true` to opt in) |
-| Images | `HF_TOKEN`, `HF_FLUX_*`, `REPLICATE_API_TOKEN`, `REQUIRE_AI_UPSCALE` |
+| Images | `HF_TOKEN`, `IMAGE_PROVIDERS` (default `hf-fal,pollinations,placeholder`), `BUYER_IMAGE_PROVIDERS=hf-fal`, `IMAGE_MONTHLY_CREDIT_CAP_USD=1.50`. OpenAI Images is never used. Replicate stays off unless `ENABLE_PAID_REPLICATE=1`. |
 | Shopify / buyers | `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_PACK_PRODUCT_ID`, `SHOPIFY_CREDITS_PER_PACK`, `RESEND_API_KEY`, `MAIL_FROM`, `BUYER_PIPELINE_STRICT`, `FREE_CREDITS` |
 | Billing | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_METER_EVENT_NAME` |
 | Story Shorts | `PIPER_BIN`, `PIPER_MODEL`, `PIPER_LENGTH_SCALE`, `PIPER_SENTENCE_SILENCE`, `ESPEAK_*`, `FFMPEG_BIN`, `FFPROBE_BIN`, `SHORTS_MAX_CONCURRENT`, `SHORTS_FFMPEG_THREADS` |
@@ -57,6 +57,10 @@ All settings are environment variables; [.env.example](.env.example) lists every
 | Media/MCP | `VOICESTUDIO_MCP_URL`, `PHOTOCRAFT_CLI`, `REA_MCP`, `MCP_SERVERS_FILE`, `ALLOW_STDIO_IMPORT`, `AGENTS_DIR`, `SCHEDULER` |
 
 Optional Supabase store instead of SQLite: `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` (Shopify credits need SQLite).
+
+### Images
+
+Every canvas, pipeline, buyer, and agent image goes through `runFlux()`. The preview chain is Hugging Face fal-ai FLUX.1-schnell (included PRO credits, local cap $1.50 of the about $2 monthly credit, estimated at $0.003 per megapixel), then anonymous Pollinations, then a labelled offline placeholder. Pollinations adds a watermark, allows one request at a time, and can cache the prompt publicly, so do not send confidential text. Buyer runs use only `hf-fal` and refund when that route cannot answer. The cap is a local SQLite estimate, not the HF invoice; two machines on one HF account can still overshoot. OpenAI Images is never called. Gemini image generation stays off until included-credit billing is confirmed. A Replicate token does not upscale anything unless `ENABLE_PAID_REPLICATE=1`. Sharp output is a resize, not AI upscaling.
 
 ## Health and tests
 

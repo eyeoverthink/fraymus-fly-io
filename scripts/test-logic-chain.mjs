@@ -22,7 +22,7 @@ const dataDir = mkdtempSync(join(tmpdir(), 'logic-chain-test-'))
 const port = String(5700 + Math.floor(Math.random() * 250))
 // Every provider key blanked: the run must be MOCK and must not reach the network.
 const env = { ...process.env, PORT: port, HOST: '127.0.0.1', DATA_DIR: dataDir, LLM_PROVIDERS: 'none', SCHEDULER: 'off', NODE_ENV: 'test', WORKSPACE_AUTH: '', WORKSPACE_ACCESS_TOKEN: TOKEN,
-  GROQ_API_KEY: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', LIBRARY_SYNC_MS: '600000', REPLICATE_API_TOKEN: '', FAL_KEY: '', HF_TOKEN: '',
+  GROQ_API_KEY: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', LIBRARY_SYNC_MS: '600000', REPLICATE_API_TOKEN: '', ENABLE_PAID_REPLICATE: '', FAL_KEY: '', HF_TOKEN: '', IMAGE_PROVIDERS: 'placeholder',
   XAI_API_KEY: '', PROMPT_LLM_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', FRAYMUS_IDENTITY_FILE: '', FRAYMUS_IDENTITY_SEED: '', LOGIC_CHAIN: '', LOGIC_CHAIN_URL: '', LOGIC_CHAIN_POLL_MS: '300',
   LOGIC_CHAIN_MAX_RUN_CENTS: '', LOGIC_CHAIN_MAX_PLAN_CALLS: '' }
 const p = spawn('npx', ['tsx', 'server/index.ts'], { env, stdio: process.env.DEBUG ? 'inherit' : 'ignore', detached: true })

@@ -48,7 +48,7 @@ const LLM = `http://127.0.0.1:${llm.address().port}/v1`
 async function boot(extra = {}, dataDir = mkdtempSync(join(tmpdir(), 'mem-test-'))) {
   const port = String(4300 + Math.floor(Math.random() * 400))
   const env = { ...process.env, PORT: port, HOST: '127.0.0.1', DATA_DIR: dataDir, LLM_PROVIDERS: 'openai', OPENAI_BASE_URL: LLM, OPENAI_API_KEY: 'fake', OPENAI_MODEL: 'fake',
-    EMBED_BASE_URL: LLM, EMBED_API_KEY: 'fake', SCHEDULER: 'off', NODE_ENV: 'test', WORKSPACE_AUTH: '', WORKSPACE_ACCESS_TOKEN: TOKEN, GROQ_API_KEY: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', ...extra }
+    EMBED_BASE_URL: LLM, EMBED_API_KEY: 'fake', SCHEDULER: 'off', NODE_ENV: 'test', WORKSPACE_AUTH: '', WORKSPACE_ACCESS_TOKEN: TOKEN, GROQ_API_KEY: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', HF_TOKEN: '', IMAGE_PROVIDERS: 'placeholder', ENABLE_PAID_REPLICATE: '', ...extra }
   const p = spawn('npx', ['tsx', 'server/index.ts'], { env, stdio: process.env.DEBUG ? 'inherit' : 'ignore', detached: true })
   const base = `http://127.0.0.1:${port}`
   for (let i = 0; i < 80; i++) { try { if ((await fetch(base + '/health')).ok) break } catch {} await sleep(400) }

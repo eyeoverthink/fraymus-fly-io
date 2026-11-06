@@ -10,7 +10,11 @@ export function FluxNode({ data, selected }: NodeProps) {
       <div style={{ marginTop: 8, background: '#0a0a0a', padding: 8, borderRadius: 8, fontSize: 10, fontFamily: 'monospace' }}>
         prompt → image (1024x1024)<br/>cost: $0 • 4 steps • commercial use OK
       </div>
-      {d.lastOutput?.imageUrl && <div style={{ marginTop: 8, borderRadius: 8, overflow: 'hidden', border: '1px solid #333' }}><img src={d.lastOutput.imageUrl} style={{ width: '100%' }} /></div>}
+      {d.lastOutput?.engine && <div style={{ marginTop: 8, fontSize: 10, color: d.lastOutput.watermark || d.lastOutput.mocked ? '#fbbf24' : '#86efac' }}>
+        {d.lastOutput.mocked ? 'Offline placeholder' : d.lastOutput.watermark ? 'Watermarked free tier' : d.lastOutput.costMode === 'included-credit' ? 'Included HF credits' : (d.lastOutput.costMode || 'Image')}
+        {' · '}{d.lastOutput.engine}
+      </div>}
+      {d.lastOutput?.imageUrl && <div style={{ marginTop: 8, borderRadius: 8, overflow: 'hidden', border: '1px solid #333' }}><img src={d.lastOutput.imageUrl} alt="" style={{ width: '100%' }} /></div>}
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
     </div>

@@ -39,7 +39,7 @@ $('out').onclick=e=>{e.preventDefault();localStorage.removeItem('fx_tok');locati
 $('go').onclick=async()=>{$('go').disabled=true;$('rmsg').textContent='Running… this can take a minute.';$('result').textContent='';
 const r=await api('/buyer/enhance',{prompt:$('prompt').value});$('go').disabled=false;
 if(r.j.credits!==undefined)$('credits').textContent=r.j.credits;
-if(r.ok){lib();$('rmsg').textContent='Done.';const a=document.createElement('a');a.href=r.j.imageUrl;a.download='fraymus.png';const i=document.createElement('img');i.src=r.j.imageUrl;a.appendChild(i);$('result').appendChild(a)}
+if(r.ok){lib();const who=(r.j.steps||[]).filter(s=>s.engine).map(s=>s.engine+(s.watermark?' (watermark)':'')+(s.costMode?' ['+s.costMode+']':'')).join(', ');$('rmsg').textContent=who?'Done. '+who+'.':'Done.';const a=document.createElement('a');a.href=r.j.imageUrl;a.download='fraymus.png';const i=document.createElement('img');i.src=r.j.imageUrl;a.appendChild(i);$('result').appendChild(a)}
 else{$('rmsg').innerHTML='';const p=document.createElement('p');p.className='err';p.textContent=(r.j.error||'Run failed')+(r.j.refunded?' — credit refunded.':'');$('rmsg').appendChild(p);
 (r.j.steps||[]).filter(s=>s.error).forEach(s=>{const d=document.createElement('div');d.className='muted';d.textContent=s.id+': '+s.error;$('rmsg').appendChild(d)})}}
 me();

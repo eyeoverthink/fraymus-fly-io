@@ -145,9 +145,15 @@ fastify.post('/api/flux', async (req, reply) => {
   const { prompt } = (req.body as any) || {}
   if (!prompt) return reply.status(400).send({ error: 'prompt required' })
   try {
-    const { png, mocked } = await runFlux(String(prompt))
-    keepCanvasOutput(req, reply, png, 'flux', String(prompt), { prompt: String(prompt), mocked })
-    return reply.header('Content-Type', 'image/png').header('X-Mocked', String(mocked)).send(png)
+    const img = await runFlux(String(prompt))
+    keepCanvasOutput(req, reply, img.png, 'flux', String(prompt), {
+      prompt: String(prompt), mocked: img.mocked, engine: img.engine, model: img.model,
+      costMode: img.costMode, watermark: !!img.watermark
+    })
+    return reply.header('Content-Type', 'image/png').header('X-Mocked', String(img.mocked))
+      .header('X-Image-Engine', img.engine).header('X-Image-Cost-Mode', img.costMode)
+      .header('X-Image-Watermark', String(!!img.watermark)).header('X-Image-Model', img.model)
+      .send(img.png)
   } catch (e: any) {
     return reply.status(500).send({ error: e.message })
   }
@@ -170,9 +176,9 @@ fastify.post('/api/upscaler', async (req, reply) => {
     const { buffer, fields } = await readImageInput(req)
     if (!buffer) return reply.status(400).send({ error: 'No image' })
     const scale = Math.min(Math.max(parseInt(fields.scale) || 4, 1), 4)
-    const { png, from, to, engine } = await runUpscaler(buffer, scale)
-    keepCanvasOutput(req, reply, png, 'upscaler', `Upscaled ${from} → ${to}`, { engine, from, to })
-    return reply.header('Content-Type', 'image/png').header('X-Upscale-From', from).header('X-Upscale-To', to).header('X-Upscaler', engine).send(png)
+    const { png, from, to, engine, kind } = await runUpscaler(buffer, scale)
+    keepCanvasOutput(req, reply, png, 'upscaler', `Upscaled ${from} → ${to}`, { engine, kind, from, to })
+    return reply.header('Content-Type', 'image/png').header('X-Upscale-From', from).header('X-Upscale-To', to).header('X-Upscaler', engine).header('X-Upscale-Kind', kind).send(png)
   } catch (e: any) {
     return reply.status(500).send({ error: e.message })
   }

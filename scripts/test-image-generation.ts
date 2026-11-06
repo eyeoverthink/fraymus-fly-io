@@ -256,6 +256,32 @@ try {
   }
   const paid = await services.runUpscaler(tiny, 2)
   ok(paid.engine === 'replicate-real-esrgan' && paid.kind === 'ai-upscale' && urls().some((u) => u.includes('api.replicate.com')), 'ENABLE_PAID_REPLICATE=1 is required before Replicate is called')
+
+  // Local worker: private bridge only. Offline stays offline. No public or paid fallback.
+  img.resetImageGenForTests(); installFetch()
+  process.env.DATA_DIR = dir
+  delete process.env.LOCAL_IMAGE_ENDPOINT
+  delete process.env.LOCAL_IMAGE_TOKEN
+  handler = async () => { throw new Error('should not be called') }
+  const absent = await img.fetchLocalImage('a warm room', 32, 48)
+  ok('offline' in absent && absent.offline === true && urls().length === 0, 'unset local worker makes no request')
+  process.env.LOCAL_IMAGE_ENDPOINT = 'http://127.0.0.1:8188/fraymus/generate'
+  process.env.LOCAL_IMAGE_TOKEN = 'secret-token'
+  installFetch()
+  handler = async (url, init) => {
+    if (/openai|replicate|pollinations|huggingface/i.test(url)) throw new Error('wrong host ' + url)
+    const headers = init?.headers as Record<string, string> | undefined
+    if (headers?.Authorization !== 'Bearer secret-token') return new Response('no', { status: 401 })
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (body.width !== 32 || body.height !== 48) return new Response('size', { status: 400 })
+    return png()
+  }
+  const bridged = await img.fetchLocalImage('a warm room', 32, 48)
+  ok(!('offline' in bridged) && bridged.png.length > 8 && urls().length === 1, 'local worker returns only the private bridge image')
+  installFetch()
+  handler = async () => new Response('down', { status: 503 })
+  const down = await img.fetchLocalImage('a warm room', 32, 48)
+  ok('offline' in down && down.offline === true && urls().every((u) => u.includes('127.0.0.1:8188')), 'an offline worker is not replaced by a public or paid image API')
 } catch (e: any) {
   console.error('THREW', e)
   failures++

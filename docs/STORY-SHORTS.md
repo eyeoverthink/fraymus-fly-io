@@ -14,7 +14,7 @@ The original used paid cloud models (Opus, Nano Banana Pro, Wan, ElevenLabs); he
 | 1 | script | narration → length / hook / "you" report | advisory only | `checkScript` | your own LLM, fact-checked |
 | 2 | plan   | narration → 12 shots (line, picture prompt, camera move, sound, cast) | narration word for word, opening + last line kept, main character in ≥60% of shots, ≤3 characters, valid moves | `buildPlan` + `verifyPlan` | – |
 | 3 | voice  | narration → voice track + word timings | uploaded Whisper timings must match the script word for word | Piper (if `PIPER_MODEL`) → espeak-ng → silent guide | VoiceStudio (your cloned / designed voice) or any TTS + word timings, uploaded by the PC worker |
-| 4 | images | prompt → one 9:16 picture per shot | 9:16, not a plain background, warm light | sharp storyboard frame | SD/Flux/ComfyUI on the GPU, uploaded per shot |
+| 4 | images | prompt → one 9:16 picture per shot | 9:16, not a plain background, warm light | sharp storyboard frame, labelled as a drawn stand-in, not a generated illustration. If `LOCAL_IMAGE_ENDPOINT` is set, that private worker is tried first and named `local`; if it is offline the stand-in is used and the stage says so | SD/Flux/ComfyUI on the GPU, uploaded per shot, or the same private `LOCAL_IMAGE_ENDPOINT` |
 | 5 | clips  | picture → clip as long as the shot | size, length, start→end drift (character stays itself) | ffmpeg zoompan camera move | Wan / LTX image-to-video, uploaded per shot |
 | 6 | sfx    | sound idea → low effect per shot | – | ffmpeg-synthesised effects (license-free) | your own SFX, uploaded |
 | 7 | edit   | clips + voice + sfx → final MP4 | – | ffmpeg concat, cuts just before each shot's first word, burned-in ASS captions, loudnorm −14 LUFS | – |

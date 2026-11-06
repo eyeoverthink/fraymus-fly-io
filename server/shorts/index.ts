@@ -6,6 +6,7 @@
 // per shot; when nothing is uploaded the CPU fallbacks below are used.
 import { createHash, randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import sharp from 'sharp'
 import type { FastifyInstance } from 'fastify'
 import { db, now } from '../agent/db'
 import { registerTools, type Tool } from '../agent/tools'
@@ -15,6 +16,7 @@ import {
   DEFAULT_CAST, DEFAULT_RULES, MOTIONS, buildPlan, captionsAss, checkScript, cutDrift, cutTimes, estimateTimings, matchTranscript, verifyPlan,
   type CastMember, type Check, type Plan, type Rule, type Word
 } from './plan'
+import { fetchLocalImage } from '../image-generation'
 import { SFX_TAGS, checkClip, checkPicture, clipFromImage, duration, finalEdit, loudness, makeSfx, storyboardFrame, studyReference, synthVoice, toolStatus } from './media'
 
 export const STAGES = ['script', 'plan', 'voice', 'images', 'clips', 'sfx', 'edit', 'qa'] as const
@@ -33,7 +35,7 @@ type State = {
   voice?: { file: string; url: string; engine: string; seconds: number; uploaded?: boolean; heard?: string; match?: any; sha?: string }
   timings?: Word[]; timingSource?: string
   timingsFor?: string // sha256 of the voice take the uploaded word timings were made from
-  images?: { n: number; url: string; source: string; check: Check }[]
+  images?: { n: number; url: string; source: string; check: Check; note?: string }[]
   clips?: { n: number; url: string; source: string; check: Check }[]
   sfx?: { n: number; tag: string; url: string }[]
   cuts?: ReturnType<typeof cutTimes>; drift?: number
@@ -141,13 +143,29 @@ async function runStage(run: Row, input: Input, st: State, stage: Stage): Promis
       for (const shot of st.plan!.shots) {
         const up = uploaded(run.id, 'image', shot.n, 'png')
         const file = `${dir}/shot-${shot.n}.png`
-        if (up) copyFileSync(up, file); else writeFileSync(file, await storyboardFrame(shot, input.cast, input.w, input.h))
+        let source = 'storyboard'
+        let note = 'drawn stand-in, not a generated illustration'
+        if (up) {
+          copyFileSync(up, file)
+          source = 'upload'
+          note = ''
+        } else if (process.env.LOCAL_IMAGE_ENDPOINT) {
+          const local = await fetchLocalImage(shot.picture, input.w, input.h)
+          if ('offline' in local) {
+            writeFileSync(file, await storyboardFrame(shot, input.cast, input.w, input.h))
+            note = 'Local image worker offline. This frame is a drawn stand-in, not a generated illustration.'
+          } else {
+            writeFileSync(file, await sharp(local.png).resize(input.w, input.h, { fit: 'cover', position: 'centre' }).png().toBuffer())
+            source = 'local'
+            note = 'local worker'
+          }
+        } else writeFileSync(file, await storyboardFrame(shot, input.cast, input.w, input.h))
         const check = await checkPicture(file, input.w, input.h)
-        out.push({ n: shot.n, source: up ? 'upload' : 'storyboard', check, url: publish(run, file, `shot-${shot.n}.png`, `${input.title} · shot ${shot.n}`, 'images', { prompt: shot.picture, shot: shot.n }) })
+        out.push({ n: shot.n, source, note, check, url: publish(run, file, `shot-${shot.n}.png`, `${input.title} · shot ${shot.n}`, 'images', { prompt: shot.picture, shot: shot.n, source, note }) })
       }
       st.images = out
       const issues = out.flatMap((i) => i.check.issues.map((x) => `shot ${i.n}: ${x}`))
-      return { issues, text: out.map((i) => `${i.n}. ${i.source} ${i.check.ok ? 'ok' : i.check.issues.join('; ')}`).join('\n'), data: { images: out } }
+      return { issues, text: out.map((i) => `${i.n}. ${i.source}${i.note ? ' (' + i.note + ')' : ''} ${i.check.ok ? 'ok' : i.check.issues.join('; ')}`).join('\n'), data: { images: out } }
     }
     case 'clips': {
       need('images', 'images'); need('timings', 'voice')
@@ -200,7 +218,8 @@ async function runStage(run: Row, input: Input, st: State, stage: Stage): Promis
       if (Math.abs(st.final!.seconds - (st.voice!.seconds + 0.3)) > 1) issues.push(`final length ${st.final!.seconds}s doesn't match the voice (${st.voice!.seconds}s)`)
       if (!st.verify?.ok) issues.push('plan check did not pass')
       if (st.timingSource !== 'upload') warn.push('word timings are estimated; upload Whisper word timings for exact cuts and captions')
-      for (const s of ['images', 'clips'] as const) for (const x of st[s] || []) if (x.source !== 'upload') { warn.push(`${s}: CPU fallbacks used (upload GPU renders per shot to replace them)`); break }
+      for (const x of st.images || []) if (x.source === 'storyboard') { warn.push(x.note || 'images: drawn stand-in, not a generated illustration'); break }
+      for (const x of st.clips || []) if (x.source !== 'upload') { warn.push('clips: CPU camera move, not a generated video'); break }
       st.qa = { ok: issues.length === 0, issues, stats: { drift: st.drift, lufs: l, seconds: st.final!.seconds, voice: st.voice!.engine, timings: st.timingSource, warnings: warn } }
       return { issues, text: `QA ${st.qa.ok ? 'passed' : 'failed'}\n${[...issues, ...warn.map((w) => 'note: ' + w)].map((x) => '- ' + x).join('\n')}\nWatch it back: ${st.final!.url}`, data: { qa: st.qa } }
     }

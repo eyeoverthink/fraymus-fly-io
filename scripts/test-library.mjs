@@ -45,7 +45,7 @@ async function boot(dataDir) {
   const port = String(4800 + Math.floor(Math.random() * 400))
   const env = { ...process.env, PORT: port, HOST: '127.0.0.1', DATA_DIR: dataDir, LLM_PROVIDERS: 'openai', OPENAI_BASE_URL: LLM, OPENAI_API_KEY: 'fake', OPENAI_MODEL: 'fake',
     EMBED_BASE_URL: LLM, EMBED_API_KEY: 'fake', SCHEDULER: 'off', NODE_ENV: 'test', WORKSPACE_AUTH: '', WORKSPACE_ACCESS_TOKEN: TOKEN, GROQ_API_KEY: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '',
-    FREE_CREDITS: '', LIBRARY_SYNC_MS: '600000', REPLICATE_API_TOKEN: '', REPLICATE_UPSCALE: '', FAL_KEY: '', HF_TOKEN: '', POLLINATIONS: 'off', IMAGE_PROVIDER: '', IMAGE_OPENAI: '' }
+    FREE_CREDITS: '', LIBRARY_SYNC_MS: '600000', REPLICATE_API_TOKEN: '', ENABLE_PAID_REPLICATE: '', FAL_KEY: '', HF_TOKEN: '', IMAGE_PROVIDERS: 'placeholder' }
   const p = spawn('npx', ['tsx', 'server/index.ts'], { env, stdio: process.env.DEBUG ? 'inherit' : 'ignore', detached: true })
   const base = `http://127.0.0.1:${port}`
   for (let i = 0; i < 80; i++) { try { if ((await fetch(base + '/health')).ok) break } catch {} await sleep(400) }

@@ -111,11 +111,11 @@ export const builtinTools: Tool[] = [
     }
   },
   {
-    name: 'generate_image', risk: 'safe', description: 'Generate an image from a text prompt (FLUX). Returns an imageUrl.',
+    name: 'generate_image', risk: 'safe', description: 'Generate an image from a text prompt using the free-first chain (included Hugging Face credits, then watermarked Pollinations, then an offline placeholder). Never calls a pay-per-image API. Returns imageUrl, engine, costMode and watermark.',
     parameters: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
     async run(a) {
       const img = await runFlux(String(a.prompt || ''))
-      return { imageUrl: await saveImage(img.png), placeholder: img.mocked, provider: img.provider, engine: img.engine, model: img.model, watermark: img.watermark, paid: img.paid, note: img.note }
+      return { imageUrl: await saveImage(img.png), placeholder: img.mocked, engine: img.engine, model: img.model, costMode: img.costMode, watermark: !!img.watermark }
     }
   },
   {
@@ -130,8 +130,8 @@ export const builtinTools: Tool[] = [
     name: 'upscale_image', risk: 'safe', description: 'Upscale an image URL by 2-4x. Returns imageUrl.',
     parameters: { type: 'object', properties: { imageUrl: { type: 'string' }, scale: { type: 'integer', minimum: 1, maximum: 4 } }, required: ['imageUrl'] },
     async run(a) {
-      const { png, from, to, engine } = await runUpscaler(await loadImage(String(a.imageUrl)), Math.min(Math.max(parseInt(a.scale) || 4, 1), 4))
-      return { imageUrl: await saveImage(png), from, to, engine }
+      const up = await runUpscaler(await loadImage(String(a.imageUrl)), Math.min(Math.max(parseInt(a.scale) || 4, 1), 4))
+      return { imageUrl: await saveImage(up.png), from: up.from, to: up.to, engine: up.engine, kind: up.kind }
     }
   },
   {

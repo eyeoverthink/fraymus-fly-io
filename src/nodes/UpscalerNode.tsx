@@ -46,7 +46,7 @@ export function UpscalerNode({ data, selected }: NodeProps) {
           {d.lastOutput.originalUrl
             ? <CompareSlider before={d.lastOutput.originalUrl} after={d.lastOutput.imageUrl} />
             : <img src={d.lastOutput.imageUrl} style={{ width: '100%', display: 'block', borderRadius: 8 }} />}
-          {d.lastOutput.size && <div style={{ fontSize: 10, color: '#4ade80', marginTop: 4 }}>{d.lastOutput.size}{d.lastOutput.engine ? ` · ${d.lastOutput.engine}` : ''}</div>}
+          {d.lastOutput.size && <div style={{ fontSize: 10, color: '#4ade80', marginTop: 4 }}>{d.lastOutput.size}{d.lastOutput.engine ? ` · ${d.lastOutput.kind === 'resize' ? 'Sharp resize (not AI upscale)' : d.lastOutput.engine}` : ''}</div>}
         </div>
       )}
       <Handle type="target" position={Position.Left} style={{ background: '#22c55e' }} />

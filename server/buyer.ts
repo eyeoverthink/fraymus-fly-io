@@ -114,7 +114,7 @@ export function registerBuyerRoutes(app: FastifyInstance, store: Store, opts: { 
       status: result.status, refunded: result.status !== 'success', credits: after?.credits ?? 0,
       imageUrl: img?.startsWith('/') ? opts.baseUrl(req) + img : img,
       error: result.status === 'success' ? undefined : (firstError || 'Run failed'),
-      steps: Object.entries(result.results).map(([id, r]: any) => ({ id, engine: r.engine, provider: r.provider, model: r.model, watermark: !!r.watermark, paid: !!r.paid, note: r.note, mocked: !!r.mocked, error: r.error, ms: r.durationMs }))
+      steps: Object.entries(result.results).map(([id, r]: any) => ({ id, engine: r.engine, model: r.model, costMode: r.costMode, watermark: !!r.watermark, kind: r.kind, mocked: !!r.mocked, error: r.error, ms: r.durationMs }))
     })
   })
 }

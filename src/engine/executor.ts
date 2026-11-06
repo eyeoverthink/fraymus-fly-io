@@ -94,12 +94,11 @@ export async function executeWorkflow(
         const imageUrl = URL.createObjectURL(blob)
         output = {
           imageUrl, prompt, blob,
-          provider: res.headers.get('X-Image-Provider') || '',
           engine: res.headers.get('X-Image-Engine') || '',
           model: res.headers.get('X-Image-Model') || '',
+          costMode: res.headers.get('X-Image-Cost-Mode') || '',
           watermark: res.headers.get('X-Image-Watermark') === 'true',
-          mocked: res.headers.get('X-Mocked') === 'true',
-          note: res.headers.get('X-Image-Note') || ''
+          mocked: res.headers.get('X-Mocked') === 'true'
         }
       }
 
@@ -127,7 +126,7 @@ export async function executeWorkflow(
         if (!res.ok) throw new Error('Upscaler failed: ' + await errorText(res))
         const outBlob = await res.blob()
         const outUrl = URL.createObjectURL(outBlob)
-        output = { imageUrl: outUrl, originalUrl: imageUrl, scale: node.data.scale || 4, size: res.headers.get('X-Upscale-To'), engine: res.headers.get('X-Upscaler') || '' }
+        output = { imageUrl: outUrl, originalUrl: imageUrl, scale: node.data.scale || 4, size: res.headers.get('X-Upscale-To'), engine: res.headers.get('X-Upscaler') || '', kind: res.headers.get('X-Upscale-Kind') || '' }
       }
 
       else if (node.type === 'htmlPreview' || node.type === 'html-preview') {

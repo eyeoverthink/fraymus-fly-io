@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
-import { replicatePredict } from './image-gen'
+import { imageFetch } from './image-generation'
 
-export { runFlux } from './image-gen'
-export type { ImageGenResult } from './image-gen'
+export { runFlux } from './image-generation'
+export type { ImageResult, CostMode } from './image-generation'
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const DEFAULT_SYSTEM = 'You are a FLUX prompt engineer. Convert user ideas into detailed, photorealistic FLUX.1 schnell prompts. Be specific about lighting, camera, texture. Output only the prompt.'
@@ -63,32 +63,53 @@ export async function runRemover(input: Buffer): Promise<{ png: Buffer; engine: 
 }
 
 async function replicateUpscale(input: Buffer, scale: number): Promise<Buffer> {
+  const token = process.env.REPLICATE_API_TOKEN!
   const version = process.env.REPLICATE_ESRGAN_VERSION || 'nightmareai/real-esrgan'
   const png = await sharp(input).png().toBuffer()
-  return replicatePredict(version, { image: `data:image/png;base64,${png.toString('base64')}`, scale: Math.min(scale, 4), face_enhance: false })
+  const versioned = version.includes(':')
+  const url = versioned ? 'https://api.replicate.com/v1/predictions' : `https://api.replicate.com/v1/models/${version}/predictions`
+  const body: Record<string, unknown> = { input: { image: `data:image/png;base64,${png.toString('base64')}`, scale: Math.min(scale, 4), face_enhance: false } }
+  if (versioned) body.version = version.split(':')[1]
+  const r = await imageFetch(url, {
+    method: 'POST', signal: AbortSignal.timeout(90000),
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Prefer: 'wait=60' },
+    body: JSON.stringify(body)
+  })
+  let pred: any = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(`Replicate failed ${r.status}: ${JSON.stringify(pred).slice(0, 200)}`)
+  for (let i = 0; i < 60 && pred && !['succeeded', 'failed', 'canceled'].includes(pred.status); i++) {
+    await new Promise((res) => setTimeout(res, 2000))
+    pred = await (await imageFetch(pred.urls.get, { headers: { Authorization: `Bearer ${token}` } })).json()
+  }
+  if (pred?.status !== 'succeeded') throw new Error(`Replicate prediction ${pred?.status}: ${pred?.error || ''}`)
+  const outUrl = Array.isArray(pred.output) ? pred.output[0] : pred.output
+  const ir = await imageFetch(outUrl)
+  if (!ir.ok) throw new Error(`Replicate output ${ir.status}`)
+  return Buffer.from(await ir.arrayBuffer())
 }
 
-export async function runUpscaler(input: Buffer, scale = 4): Promise<{ png: Buffer; from: string; to: string; engine: string }> {
+export async function runUpscaler(input: Buffer, scale = 4): Promise<{ png: Buffer; from: string; to: string; engine: string; kind: 'resize' | 'ai-upscale' }> {
   const meta = await sharp(input).metadata()
   const w = meta.width || 1024
   const h = meta.height || 1024
   const to = `${w * scale}x${h * scale}`
-  let engine = 'sharp-lanczos3'
+  let engine = 'sharp-lanczos3-resize'
+  let kind: 'resize' | 'ai-upscale' = 'resize'
   let png: Buffer | null = null
 
-  // Real-ESRGAN bills per prediction. The token alone is not enough; REPLICATE_UPSCALE=1 is the opt-in.
-  if (process.env.REPLICATE_UPSCALE === '1' && process.env.REPLICATE_API_TOKEN) {
+  // A Replicate token alone must not spend money. ENABLE_PAID_REPLICATE=1 is the explicit opt-in.
+  if (process.env.ENABLE_PAID_REPLICATE === '1' && process.env.REPLICATE_API_TOKEN) {
     try {
       const ai = await replicateUpscale(input, scale)
-      // Real-ESRGAN output must match the requested size; normalize so the contract holds.
       png = await sharp(ai).resize(w * scale, h * scale, { kernel: 'lanczos3' }).png({ compressionLevel: 8 }).toBuffer()
       engine = 'replicate-real-esrgan'
+      kind = 'ai-upscale'
     } catch (err) {
-      console.warn('Replicate upscale failed, falling back to sharp', err)
+      console.warn('Replicate upscale failed, falling back to sharp resize', err)
     }
   }
   if (!png) {
     png = await sharp(input).resize(w * scale, h * scale, { kernel: 'lanczos3', fastShrinkOnLoad: false }).png({ compressionLevel: 8 }).toBuffer()
   }
-  return { png, from: `${w}x${h}`, to, engine }
+  return { png, from: `${w}x${h}`, to, engine, kind }
 }

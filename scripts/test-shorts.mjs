@@ -21,7 +21,7 @@ const W = 270, HH = 480
 const dataDir = mkdtempSync(join(tmpdir(), 'shorts-test-'))
 const port = String(5300 + Math.floor(Math.random() * 400))
 const env = { ...process.env, PORT: port, HOST: '127.0.0.1', DATA_DIR: dataDir, LLM_PROVIDERS: 'none', SCHEDULER: 'off', NODE_ENV: 'test', WORKSPACE_AUTH: '', WORKSPACE_ACCESS_TOKEN: TOKEN,
-  GROQ_API_KEY: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', LIBRARY_SYNC_MS: '600000', REPLICATE_API_TOKEN: '', REPLICATE_UPSCALE: '', FAL_KEY: '', HF_TOKEN: '', POLLINATIONS: 'off', IMAGE_OPENAI: '', SHORTS_FFMPEG_THREADS: '4' }
+  GROQ_API_KEY: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', LIBRARY_SYNC_MS: '600000', REPLICATE_API_TOKEN: '', ENABLE_PAID_REPLICATE: '', FAL_KEY: '', HF_TOKEN: '', IMAGE_PROVIDERS: 'placeholder', SHORTS_FFMPEG_THREADS: '4' }
 const p = spawn('npx', ['tsx', 'server/index.ts'], { env, stdio: process.env.DEBUG ? 'inherit' : 'ignore', detached: true })
 const base = `http://127.0.0.1:${port}`
 const stop = () => new Promise((r) => { p.on('exit', () => setTimeout(r, 300)); try { process.kill(-p.pid) } catch { p.kill() } })

@@ -1,6 +1,10 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
+import { replicatePredict } from './image-gen'
+
+export { runFlux } from './image-gen'
+export type { ImageGenResult } from './image-gen'
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const DEFAULT_SYSTEM = 'You are a FLUX prompt engineer. Convert user ideas into detailed, photorealistic FLUX.1 schnell prompts. Be specific about lighting, camera, texture. Output only the prompt.'
@@ -31,77 +35,6 @@ export async function runLlama(prompt: string, system = DEFAULT_SYSTEM): Promise
   return { text, engine: `${pick}:${model}` }
 }
 
-function escapeXml(s: string) {
-  return s.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c] as string))
-}
-
-export async function runFlux(prompt: string): Promise<{ png: Buffer; mocked: boolean; engine?: string }> {
-  const token = process.env.HF_TOKEN
-  if (!token) {
-    const svg = `<svg width="1024" height="1024" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#e5e7eb"/><circle cx="512" cy="430" r="170" fill="#6366f1"/><rect x="332" y="620" width="360" height="260" rx="40" fill="#6366f1"/><text x="50%" y="960" text-anchor="middle" fill="#111" font-family="monospace" font-size="24">FLUX placeholder - set HF_TOKEN: ${escapeXml(prompt.slice(0, 40))}</text></svg>`
-    return { png: await sharp(Buffer.from(svg)).png().toBuffer(), mocked: true }
-  }
-  // hf-inference no longer serves FLUX.1-schnell (410 "deprecated"). Route through HF Inference Providers instead.
-  // HF_FLUX_PROVIDER: comma-separated order to try (default "nscale,fal-ai"); HF_FLUX_MODEL overrides the model id.
-  // HF_FLUX_URL (legacy) still forces a raw-bytes hf-inference style endpoint.
-  const model = process.env.HF_FLUX_MODEL || 'black-forest-labs/FLUX.1-schnell'
-  const providers = process.env.HF_FLUX_URL ? ['url'] : (process.env.HF_FLUX_PROVIDER || 'nscale,fal-ai').split(',').map((s) => s.trim()).filter(Boolean)
-  const errors: string[] = []
-  for (const provider of providers) {
-    try {
-      const raw = await fluxViaProvider(provider, model, prompt, token)
-      return { png: await sharp(raw).png().toBuffer(), mocked: false, engine: `hf-${provider}:${model.split('/').pop()}` }
-    } catch (e: any) {
-      errors.push(`${provider}: ${e?.message || e}`)
-    }
-  }
-  throw new Error(`HF FLUX failed (${errors.join(' | ').slice(0, 500)})`)
-}
-
-const FAL_IDS: Record<string, string> = {
-  'black-forest-labs/FLUX.1-schnell': 'fal-ai/flux/schnell',
-  'black-forest-labs/FLUX.1-dev': 'fal-ai/flux/dev'
-}
-
-async function fluxViaProvider(provider: string, model: string, prompt: string, token: string): Promise<Buffer> {
-  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  const signal = AbortSignal.timeout(120000)
-  const steps = /schnell/i.test(model) ? 4 : 28
-  if (provider === 'nscale') {
-    const r = await fetch('https://router.huggingface.co/nscale/v1/images/generations', {
-      signal, method: 'POST', headers,
-      body: JSON.stringify({ model, prompt, size: '1024x1024', response_format: 'b64_json' })
-    })
-    if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 200)}`)
-    const j: any = await r.json()
-    const b64 = j?.data?.[0]?.b64_json
-    if (!b64) throw new Error('no image in response')
-    return Buffer.from(b64, 'base64')
-  }
-  if (provider === 'fal-ai') {
-    const id = FAL_IDS[model]
-    if (!id) throw new Error(`no fal-ai mapping for ${model}`)
-    const r = await fetch(`https://router.huggingface.co/fal-ai/${id}`, {
-      signal, method: 'POST', headers,
-      body: JSON.stringify({ prompt, num_inference_steps: steps, image_size: { width: 1024, height: 1024 } })
-    })
-    if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 200)}`)
-    const j: any = await r.json()
-    const imgUrl = j?.images?.[0]?.url
-    if (!imgUrl) throw new Error('no image in response')
-    const ir = await fetch(imgUrl, { signal })
-    if (!ir.ok) throw new Error(`image download ${ir.status}`)
-    return Buffer.from(await ir.arrayBuffer())
-  }
-  const url = provider === 'url' ? process.env.HF_FLUX_URL! : `https://router.huggingface.co/${provider}/models/${model}`
-  const r = await fetch(url, {
-    signal, method: 'POST', headers,
-    body: JSON.stringify({ inputs: prompt, parameters: { num_inference_steps: steps, guidance_scale: 0 } })
-  })
-  if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 200)}`)
-  return Buffer.from(await r.arrayBuffer())
-}
-
 function removeInWorker(input: Buffer, timeoutMs = 180000): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const p = spawn(process.execPath, [fileURLToPath(new URL('./remover-worker.mjs', import.meta.url))], { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -130,28 +63,9 @@ export async function runRemover(input: Buffer): Promise<{ png: Buffer; engine: 
 }
 
 async function replicateUpscale(input: Buffer, scale: number): Promise<Buffer> {
-  const token = process.env.REPLICATE_API_TOKEN!
   const version = process.env.REPLICATE_ESRGAN_VERSION || 'nightmareai/real-esrgan'
   const png = await sharp(input).png().toBuffer()
-  const body: any = { input: { image: `data:image/png;base64,${png.toString('base64')}`, scale: Math.min(scale, 4), face_enhance: false } }
-  const url = version.includes(':')
-    ? 'https://api.replicate.com/v1/predictions'
-    : `https://api.replicate.com/v1/models/${version}/predictions`
-  if (version.includes(':')) body.version = version.split(':')[1]
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Prefer: 'wait=60' },
-    body: JSON.stringify(body)
-  })
-  let pred: any = await r.json()
-  if (!r.ok) throw new Error(`Replicate failed ${r.status}: ${JSON.stringify(pred).slice(0, 300)}`)
-  for (let i = 0; i < 60 && !['succeeded', 'failed', 'canceled'].includes(pred.status); i++) {
-    await new Promise((res) => setTimeout(res, 2000))
-    pred = await (await fetch(pred.urls.get, { headers: { Authorization: `Bearer ${token}` } })).json()
-  }
-  if (pred.status !== 'succeeded') throw new Error(`Replicate prediction ${pred.status}: ${pred.error || ''}`)
-  const outUrl = Array.isArray(pred.output) ? pred.output[0] : pred.output
-  return Buffer.from(await (await fetch(outUrl)).arrayBuffer())
+  return replicatePredict(version, { image: `data:image/png;base64,${png.toString('base64')}`, scale: Math.min(scale, 4), face_enhance: false })
 }
 
 export async function runUpscaler(input: Buffer, scale = 4): Promise<{ png: Buffer; from: string; to: string; engine: string }> {
@@ -162,7 +76,8 @@ export async function runUpscaler(input: Buffer, scale = 4): Promise<{ png: Buff
   let engine = 'sharp-lanczos3'
   let png: Buffer | null = null
 
-  if (process.env.REPLICATE_API_TOKEN) {
+  // Real-ESRGAN bills per prediction. The token alone is not enough; REPLICATE_UPSCALE=1 is the opt-in.
+  if (process.env.REPLICATE_UPSCALE === '1' && process.env.REPLICATE_API_TOKEN) {
     try {
       const ai = await replicateUpscale(input, scale)
       // Real-ESRGAN output must match the requested size; normalize so the contract holds.

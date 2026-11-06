@@ -92,7 +92,15 @@ export async function executeWorkflow(
         if (!res.ok) throw new Error('FLUX failed: ' + await errorText(res))
         const blob = await res.blob()
         const imageUrl = URL.createObjectURL(blob)
-        output = { imageUrl, prompt, blob }
+        output = {
+          imageUrl, prompt, blob,
+          provider: res.headers.get('X-Image-Provider') || '',
+          engine: res.headers.get('X-Image-Engine') || '',
+          model: res.headers.get('X-Image-Model') || '',
+          watermark: res.headers.get('X-Image-Watermark') === 'true',
+          mocked: res.headers.get('X-Mocked') === 'true',
+          note: res.headers.get('X-Image-Note') || ''
+        }
       }
 
       else if (node.type === 'remover' || node.type === 'remover-birefnet') {
@@ -119,7 +127,7 @@ export async function executeWorkflow(
         if (!res.ok) throw new Error('Upscaler failed: ' + await errorText(res))
         const outBlob = await res.blob()
         const outUrl = URL.createObjectURL(outBlob)
-        output = { imageUrl: outUrl, originalUrl: imageUrl, scale: node.data.scale || 4, size: res.headers.get('X-Upscale-To') }
+        output = { imageUrl: outUrl, originalUrl: imageUrl, scale: node.data.scale || 4, size: res.headers.get('X-Upscale-To'), engine: res.headers.get('X-Upscaler') || '' }
       }
 
       else if (node.type === 'htmlPreview' || node.type === 'html-preview') {

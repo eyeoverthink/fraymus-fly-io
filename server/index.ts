@@ -145,9 +145,16 @@ fastify.post('/api/flux', async (req, reply) => {
   const { prompt } = (req.body as any) || {}
   if (!prompt) return reply.status(400).send({ error: 'prompt required' })
   try {
-    const { png, mocked } = await runFlux(String(prompt))
-    keepCanvasOutput(req, reply, png, 'flux', String(prompt), { prompt: String(prompt), mocked })
-    return reply.header('Content-Type', 'image/png').header('X-Mocked', String(mocked)).send(png)
+    const img = await runFlux(String(prompt))
+    const note = String(img.note || '').replace(/[^\x20-\x7E]/g, ' ').slice(0, 180)
+    keepCanvasOutput(req, reply, img.png, 'flux', String(prompt), {
+      prompt: String(prompt), mocked: img.mocked, provider: img.provider, engine: img.engine, model: img.model,
+      watermark: img.watermark, paid: img.paid, included: img.included, note: img.note
+    })
+    return reply.header('Content-Type', 'image/png').header('X-Mocked', String(img.mocked))
+      .header('X-Image-Provider', img.provider).header('X-Image-Engine', img.engine).header('X-Image-Model', img.model)
+      .header('X-Image-Watermark', String(img.watermark)).header('X-Image-Paid', String(img.paid)).header('X-Image-Note', note)
+      .send(img.png)
   } catch (e: any) {
     return reply.status(500).send({ error: e.message })
   }

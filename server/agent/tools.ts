@@ -114,8 +114,8 @@ export const builtinTools: Tool[] = [
     name: 'generate_image', risk: 'safe', description: 'Generate an image from a text prompt (FLUX). Returns an imageUrl.',
     parameters: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
     async run(a) {
-      const { png, mocked } = await runFlux(String(a.prompt || ''))
-      return { imageUrl: await saveImage(png), placeholder: mocked }
+      const img = await runFlux(String(a.prompt || ''))
+      return { imageUrl: await saveImage(img.png), placeholder: img.mocked, provider: img.provider, engine: img.engine, model: img.model, watermark: img.watermark, paid: img.paid, note: img.note }
     }
   },
   {

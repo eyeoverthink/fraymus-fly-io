@@ -41,7 +41,7 @@ export function topoSort(nodes: any[], edges: any[]): string[] {
 
 export type PipelineResult = {
   status: 'success' | 'failed'
-  results: Record<string, { type: string; durationMs: number; error?: string; text?: string; imageUrl?: string; engine?: string; mocked?: boolean }>
+  results: Record<string, { type: string; durationMs: number; error?: string; text?: string; imageUrl?: string; engine?: string; mocked?: boolean; provider?: string; model?: string; watermark?: boolean; paid?: boolean; note?: string }>
   imageUrl?: string
   html?: string
   durationMs: number
@@ -77,11 +77,12 @@ export async function runPipeline(nodes: any[], edges: any[], opts: { prompt?: s
         texts[id] = r.text = out.text
       } else if (k === 'flux') {
         const prompt = upstreamText || opts.prompt || node.data?.prompt || 'mirror selfie'
-        const { png, mocked, engine } = await runFlux(prompt)
-        r.engine = mocked ? 'placeholder' : engine || 'hf-flux'; r.mocked = mocked
-        if (opts.strict && mocked) throw new Error('Image model not configured (set HF_TOKEN)')
-        buffers[id] = png
-        r.imageUrl = await saveImage(png)
+        const out = await runFlux(prompt, { strict: !!opts.strict })
+        r.engine = out.engine; r.mocked = out.mocked; r.provider = out.provider; r.model = out.model
+        r.watermark = out.watermark; r.paid = out.paid; r.note = out.note
+        if (opts.strict && out.mocked) throw new Error(out.note || 'Image model not configured (set HF_TOKEN)')
+        buffers[id] = out.png
+        r.imageUrl = await saveImage(out.png)
       } else if (k === 'remover') {
         if (!upstreamImg) throw new Error('Remover needs an input image')
         const { png, engine } = await runRemover(upstreamImg)
@@ -93,7 +94,7 @@ export async function runPipeline(nodes: any[], edges: any[], opts: { prompt?: s
         if (!upstreamImg) throw new Error('Upscaler needs an input image')
         const { png, engine } = await runUpscaler(upstreamImg, Number(node.data?.scale) || 4)
         r.engine = engine
-        if (opts.strict && process.env.REQUIRE_AI_UPSCALE === '1' && engine !== 'replicate-real-esrgan') throw new Error('AI upscaler not available')
+        if (opts.strict && process.env.REQUIRE_AI_UPSCALE === '1' && engine !== 'replicate-real-esrgan') throw new Error('AI upscaler not available (set REPLICATE_UPSCALE=1 and REPLICATE_API_TOKEN). Local sharp resize is not billed, and this paid run is refunded.')
         buffers[id] = png
         r.imageUrl = await saveImage(png)
       } else if (k === 'html') {

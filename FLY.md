@@ -34,7 +34,8 @@ Recommended / optional:
 
 - `CLERK_SECRET_KEY` (replaces the shared-secret gate with Clerk sign-in; the buyer `/enhance` page and webhooks don't need it)
 - `VITE_CLERK_PUBLISHABLE_KEY` (build arg: `fly deploy --build-arg VITE_CLERK_PUBLISHABLE_KEY=...`)
-- `REPLICATE_API_TOKEN` (real AI upscale; otherwise a lanczos3 resize)
+- `REPLICATE_API_TOKEN` plus `REPLICATE_UPSCALE=1` in `[env]` (not a secret) for Real-ESRGAN. The token alone does nothing; upscale stays on local sharp.
+- Image generation uses included Hugging Face FLUX (`HF_TOKEN`, fal-ai only; nscale is deprecated), then anonymous Pollinations, then local ComfyUI if `COMFYUI_URL` is set. `HF_FLUX_MONTHLY_CAP` (default 80 images per UTC month) keeps HF inside included credits. Buyer runs fail and refund rather than use Pollinations, a placeholder, or a paid API. OpenAI Images and Replicate generation stay off unless `IMAGE_OPENAI=1` / `IMAGE_REPLICATE=1` and `IMAGE_PROVIDER` names that route. Do not point image calls at `OPENAI_BASE_URL`.
 
 FRAYMUS Logic Chain (all optional; with none set, runs are MOCK and signed by a labelled LOCAL KEY, see docs/LOGIC-CHAIN.md):
 

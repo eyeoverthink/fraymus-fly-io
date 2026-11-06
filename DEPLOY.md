@@ -61,7 +61,9 @@ If a Clerk user later signs in with the same verified email, the buyer balance m
       OPENAI_BASE_URL=https://router.hostinger.com/v1 OPENAI_API_KEY=... OPENAI_MODEL=gpt-5.6-luna \
       RESEND_API_KEY=re_... MAIL_FROM="FRAYMUS <codes@yourdomain.com>" \
       PUBLIC_URL=https://<app>.fly.dev
-    # optional: GROQ_API_KEY (instead of the router), REPLICATE_API_TOKEN (+ REQUIRE_AI_UPSCALE=1 for a real AI upscale),
+    # optional: GROQ_API_KEY (instead of the router), REPLICATE_API_TOKEN with REPLICATE_UPSCALE=1
+    #           (+ REQUIRE_AI_UPSCALE=1 to fail paid runs unless that upscale ran). Image generation stays on
+    #           included HF FLUX (fal-ai, monthly cap) then Pollinations. OpenAI Images stay off.
     #           CLERK_SECRET_KEY / VITE_CLERK_PUBLISHABLE_KEY (locks the workspace UI to signed-in users), MCP_ADMIN_TOKEN
     fly deploy
     curl https://<app>.fly.dev/health

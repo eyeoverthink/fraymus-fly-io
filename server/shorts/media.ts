@@ -42,7 +42,8 @@ export async function toolStatus() {
   return {
     ffmpeg: await hasBin(FF()), ffprobe: await hasBin(FP()), espeak, piper,
     piperVoice: piper ? basename(model!).replace(/\.onnx$/, '') : null,
-    voice: piper ? 'piper' : espeak ? 'espeak-ng' : 'silent-guide' // the engine the voice stage will try first
+    voice: piper ? 'piper' : espeak ? 'espeak-ng' : 'silent-guide', // the engine the voice stage will try first
+    localImage: process.env.LOCAL_IMAGE_ENDPOINT ? 'configured' : 'off'
   }
 }
 

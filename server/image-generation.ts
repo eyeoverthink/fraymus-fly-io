@@ -380,35 +380,42 @@ async function tryGemini(prompt: string, attempts: ImageAttempt[]): Promise<Imag
   }
 }
 
-async function tryLocal(prompt: string, attempts: ImageAttempt[]): Promise<ImageResult | null> {
-  const t0 = Date.now()
+/** Private ComfyUI bridge. Never calls Hugging Face, Pollinations, OpenAI, or Replicate. */
+export async function fetchLocalImage(prompt: string, width = 768, height = 768): Promise<{ png: Buffer; width: number; height: number } | { offline: true }> {
   const endpoint = process.env.LOCAL_IMAGE_ENDPOINT
-  if (!endpoint) {
-    attempts.push({ provider: 'local', status: 'Local image worker offline', durationMs: 0 })
-    return null
-  }
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'image/png, application/json' }
+  if (!endpoint) return { offline: true }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'image/png, image/jpeg, application/json' }
   if (process.env.LOCAL_IMAGE_TOKEN) headers.Authorization = `Bearer ${process.env.LOCAL_IMAGE_TOKEN}`
   try {
     const r = await imageFetch(endpoint, {
       method: 'POST', signal: AbortSignal.timeout(timeoutMs()), headers,
-      body: JSON.stringify({ prompt, width: 768, height: 768 })
+      body: JSON.stringify({ prompt, width, height })
     })
-    if (!r.ok) throw new Error('Local image worker offline')
+    if (!r.ok) return { offline: true }
     const ct = r.headers.get('content-type') || ''
     const raw = ct.includes('json')
-      ? Buffer.from((JSON.parse(await r.text())?.image || ''), 'base64')
+      ? Buffer.from(String(JSON.parse(await r.text())?.image || ''), 'base64')
       : await readLimited(r)
+    if (!raw.length) return { offline: true }
     const norm = await normalizePng(raw)
-    attempts.push({ provider: 'local', status: 'succeeded', durationMs: Date.now() - t0 })
-    return {
-      png: norm.png, mocked: false, engine: 'local-comfyui', model: 'local-comfyui', costMode: 'free',
-      width: norm.width, height: norm.height, watermark: false, attempts
-    }
+    return { png: norm.png, width: norm.width, height: norm.height }
   } catch (e: any) {
-    attempts.push({ provider: 'local', status: 'Local image worker offline', durationMs: Date.now() - t0 })
     console.warn('[image] local worker offline:', String(e?.message || e).slice(0, 120))
+    return { offline: true }
+  }
+}
+
+async function tryLocal(prompt: string, attempts: ImageAttempt[]): Promise<ImageResult | null> {
+  const t0 = Date.now()
+  const got = await fetchLocalImage(prompt, 768, 768)
+  if ('offline' in got) {
+    attempts.push({ provider: 'local', status: 'Local image worker offline', durationMs: Date.now() - t0 })
     return null
+  }
+  attempts.push({ provider: 'local', status: 'succeeded', durationMs: Date.now() - t0 })
+  return {
+    png: got.png, mocked: false, engine: 'local-comfyui', model: 'local-comfyui', costMode: 'free',
+    width: got.width, height: got.height, watermark: false, attempts
   }
 }
 

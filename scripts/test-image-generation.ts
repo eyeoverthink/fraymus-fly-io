@@ -10,12 +10,11 @@ const originalDataDir = process.env.DATA_DIR
 process.env.DATA_DIR = dir
 
 const KEYS = [
-  'SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'HF_TOKEN', 'HF_FLUX_PROVIDER', 'HF_FLUX_MODEL', 'HF_FLUX_URL',
-  'HF_IMAGE_ENABLED', 'IMAGE_PROVIDERS', 'BUYER_IMAGE_PROVIDERS', 'IMAGE_MONTHLY_CREDIT_CAP_USD',
-  'HF_IMAGE_PRICE_PER_MEGAPIXEL_USD', 'IMAGE_ALLOW_PAID_OVERRUN', 'IMAGE_GENERATION_TIMEOUT_MS',
-  'IMAGE_DOWNLOAD_MAX_BYTES', 'POLLINATIONS_MIN_INTERVAL_MS', 'GEMINI_API_KEY', 'GEMINI_IMAGE_MODEL',
-  'GEMINI_IMAGE_INCLUDED_CREDIT_ONLY', 'GEMINI_IMAGE_BILLING_CONFIRMED', 'LOCAL_IMAGE_ENDPOINT', 'LOCAL_IMAGE_TOKEN',
-  'REPLICATE_API_TOKEN', 'ENABLE_PAID_REPLICATE', 'REPLICATE_ESRGAN_VERSION'
+  'HF_TOKEN', 'HF_IMAGE_MODEL', 'HF_IMAGE_MODELS', 'IMAGE_PROVIDERS', 'BUYER_IMAGE_PROVIDERS',
+  'IMAGE_GENERATION_TIMEOUT_MS', 'IMAGE_DOWNLOAD_MAX_BYTES', 'GEMINI_API_KEY', 'GEMINI_IMAGE_MODEL',
+  'LOCAL_IMAGE_URL', 'LOCAL_IMAGE_ENDPOINT', 'LOCAL_IMAGE_KIND', 'LOCAL_IMAGE_TOKEN', 'COMFY_CHECKPOINT',
+  'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_IMAGE_MODEL', 'OPENAI_IMAGE_BASE_URL',
+  'REPLICATE_API_TOKEN', 'REPLICATE_IMAGE_MODEL', 'ENABLE_PAID_REPLICATE', 'LLM_PROVIDERS'
 ]
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
 const resetEnv = () => { for (const k of KEYS) delete process.env[k] }
@@ -32,6 +31,9 @@ let calls: Call[] = []
 let handler: (url: string, init: RequestInit | undefined) => Promise<Response> = async () => { throw new Error('no fetch') }
 let inFlight = 0
 let maxInFlight = 0
+const warnings: string[] = []
+const origWarn = console.warn
+console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')) }
 
 function installFetch() {
   calls = []; inFlight = 0; maxInFlight = 0
@@ -45,208 +47,170 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } })
 const png = (headers: Record<string, string> = {}) => new Response(PNG, { status: 200, headers: { 'content-type': 'image/png', ...headers } })
 const urls = () => calls.map((c) => c.url)
-const hfCalls = () => urls().filter((u) => u.includes('router.huggingface.co'))
-const pollCalls = () => urls().filter((u) => u.includes('image.pollinations.ai'))
-
-function falOk() {
-  handler = async (url) => {
-    if (url.includes('/nscale/')) throw new Error('nscale must not be called')
-    if (url.includes('api.openai.com') || url.includes('api.replicate.com')) throw new Error('paid host ' + url)
-    if (url.includes('/fal-ai/')) return json(200, { images: [{ url: 'https://cdn.example/out.png' }] })
-    if (url.includes('cdn.example/out.png')) return png()
-    if (url.includes('image.pollinations.ai')) return png()
-    return new Response('unexpected ' + url, { status: 500 })
-  }
-}
+const paid = () => urls().some((u) => /api\.openai\.com|api\.replicate\.com|fal-ai|nscale/.test(u))
 
 resetEnv()
 installFetch()
 try {
-  process.env.HF_TOKEN = 'hf_test'
-  process.env.POLLINATIONS_MIN_INTERVAL_MS = '0'
-  const plan = img.imageProviderPlan()
-  ok(plan.join(',') === 'hf-fal,pollinations,placeholder', `default chain (${plan.join(',')})`)
-  ok(!plan.includes('nscale') && !plan.includes('openai') && !plan.includes('replicate'), 'default chain has no nscale and no paid provider')
-  ok(img.imageProviderPlan({ strict: true }).join(',') === 'hf-fal', `buyer/strict default is hf-fal only (${img.imageProviderPlan({ strict: true }).join(',')})`)
+  ok(img.listedImageProviders().join(',') === 'huggingface,gemini,pollinations,local', `default order (${img.listedImageProviders().join(',')})`)
+  ok(img.imageProviderPlan().join(',') === 'pollinations', `with no keys only Pollinations runs (${img.imageProviderPlan().join(',')})`)
+  ok(img.listedImageProviders({ strict: true }).join(',') === 'huggingface', `buyer list is huggingface (${img.listedImageProviders({ strict: true }).join(',')})`)
+  process.env.OPENAI_API_KEY = 'sk-test-openai-key-0001'
+  process.env.REPLICATE_API_TOKEN = 'r8_testreplicatetoken0001'
+  process.env.HF_TOKEN = 'hf_testtokenvalue0001'
+  ok(img.imageProviderPlan().join(',') === 'huggingface,pollinations', `paid keys stay out of the default plan (${img.imageProviderPlan().join(',')})`)
+  ok(!img.imageProviderPlan().includes('openai') && !img.imageProviderPlan().includes('replicate'), 'openai and replicate are not active by default')
+  process.env.IMAGE_PROVIDERS = 'openai,replicate'
+  ok(img.imageProviderPlan().join(',') === 'openai,replicate', 'paid providers run only when listed and keyed')
+  delete process.env.OPENAI_API_KEY
+  delete process.env.REPLICATE_API_TOKEN
+  ok(img.imageProviderPlan().join(',') === '', 'listed paid providers without keys are skipped')
+  process.env.IMAGE_PROVIDERS = 'none'
+  ok(img.listedImageProviders().length === 0, 'none selects nothing')
 
-  // 1 + 2. nscale never called; fal success is a real PNG with engine metadata
-  img.resetImageGenForTests()
-  installFetch()
+  // Hugging Face tries FLUX, then SDXL. No fal-ai, no OpenAI.
+  resetEnv(); installFetch(); warnings.length = 0
   process.env.DATA_DIR = dir
-  process.env.HF_TOKEN = 'hf_test'
-  process.env.POLLINATIONS_MIN_INTERVAL_MS = '0'
-  process.env.IMAGE_MONTHLY_CREDIT_CAP_USD = '1.50'
-  falOk()
-  const made = await img.runFlux('blue cup')
-  const meta = await sharp(made.png).metadata()
-  ok(made.engine === 'hf-fal' && made.model.includes('FLUX.1-schnell') && made.costMode === 'included-credit' && made.mocked === false && made.watermark === false, `fal success metadata (${made.engine}, ${made.costMode})`)
-  ok(meta.format === 'png' && meta.width === 1 && meta.height === 1, `fal success normalized png ${meta.width}x${meta.height}`)
-  ok(!urls().some((u) => u.includes('/nscale/')) && hfCalls().some((u) => u.includes('/fal-ai/')), 'default selection calls fal-ai and never nscale')
-  ok(pollCalls().length === 0 && !urls().some((u) => /openai\.com|replicate\.com/.test(u)), 'fal success does not call Pollinations or a paid host')
-  const logged = await img.imageCalls()
-  ok(logged.some((r: any) => r.status === 'succeeded' && r.width === 1 && r.height === 1 && r.estimated_usd > 0), `usage row records estimate and dimensions (${JSON.stringify(logged)})`)
-
-  // 3. billing/5xx skips HF once and uses Pollinations, never OpenAI
-  for (const status of [401, 402, 403, 429, 500]) {
-    img.resetImageGenForTests(); installFetch()
-    process.env.DATA_DIR = dir
-    process.env.HF_TOKEN = 'hf_test'
-    process.env.POLLINATIONS_MIN_INTERVAL_MS = '0'
-    process.env.IMAGE_PROVIDERS = 'hf-fal,pollinations,placeholder'
-    handler = async (url) => {
-      if (url.includes('router.huggingface.co')) return new Response('quota', { status })
-      if (url.includes('image.pollinations.ai')) return png()
-      if (/openai|replicate/.test(url)) throw new Error('paid ' + url)
-      return new Response('no', { status: 500 })
-    }
-    const fell = await img.runFlux('cup ' + status)
-    ok(fell.engine === 'pollinations-classic' && fell.costMode === 'free' && fell.watermark === true, `${status} falls through to Pollinations (${fell.engine})`)
-    ok(hfCalls().length === 1 && !urls().some((u) => /openai\.com/.test(u)), `${status}: one HF call, no OpenAI, no billing retry`)
-  }
-
-  // 4. cap reservation blocks the next HF call; estimate and dimensions are stored
-  img.resetImageGenForTests(); installFetch()
-  process.env.DATA_DIR = dir
-  process.env.HF_TOKEN = 'hf_test'
-  process.env.IMAGE_PROVIDERS = 'hf-fal,placeholder'
-  process.env.POLLINATIONS_MIN_INTERVAL_MS = '0'
-  process.env.HF_IMAGE_PRICE_PER_MEGAPIXEL_USD = '0.003'
-  process.env.IMAGE_MONTHLY_CREDIT_CAP_USD = '0.004'
-  process.env.IMAGE_ALLOW_PAID_OVERRUN = 'false'
-  falOk()
-  const first = await img.runFlux('one')
-  const hfBefore = hfCalls().length
-  const second = await img.runFlux('two')
-  ok(first.engine === 'hf-fal' && second.engine === 'offline-placeholder' && second.mocked === true, `cap: second image is the placeholder (${second.engine})`)
-  ok(hfCalls().length === hfBefore, 'cap: no further HF request after the reservation is spent')
-  const rows = await img.imageCalls()
-  ok(rows.some((r: any) => r.status === 'succeeded' && r.width === 1 && r.height === 1) && rows.some((r: any) => r.status === 'cap-blocked'), `cap log has success dimensions and a blocked attempt (${rows.map((r: any) => r.status).join(',')})`)
-
-  // parallel reservations: only one HF call fits
-  img.resetImageGenForTests(); installFetch()
-  process.env.DATA_DIR = dir
-  let hfInFlight = 0, hfMax = 0
+  process.env.HF_TOKEN = 'hf_testtokenvalue0001'
+  process.env.IMAGE_PROVIDERS = 'huggingface'
+  process.env.OPENAI_API_KEY = 'sk-test-openai-key-0001'
+  process.env.OPENAI_BASE_URL = 'https://api.x.ai/v1'
+  process.env.REPLICATE_API_TOKEN = 'r8_testreplicatetoken0001'
   handler = async (url) => {
-    if (url.includes('/fal-ai/')) {
-      hfInFlight++; hfMax = Math.max(hfMax, hfInFlight)
-      await new Promise((r) => setTimeout(r, 30))
-      hfInFlight--
-      return json(200, { images: [{ url: 'https://cdn.example/out.png' }] })
-    }
-    if (url.includes('cdn.example/out.png')) return png()
-    return new Response('no', { status: 500 })
+    if (url.includes('FLUX.1-schnell')) return json(503, { error: 'model loading' })
+    if (url.includes('stable-diffusion-xl-base-1.0')) return png()
+    throw new Error('unexpected ' + url)
   }
-  const pair = await Promise.all([img.runFlux('a'), img.runFlux('b')])
-  ok(pair.filter((r) => r.engine === 'hf-fal').length === 1 && hfMax === 1, `atomic cap allows one in-flight HF call (engines ${pair.map((r) => r.engine).join(',')}, max ${hfMax})`)
+  const sdxl = await img.runFlux('hf fox')
+  ok(sdxl.engine === 'huggingface' && sdxl.model.includes('stable-diffusion-xl') && sdxl.costMode === 'free' && sdxl.mocked === false, `SDXL after FLUX fails (${sdxl.model})`)
+  ok(urls().length === 2 && urls().every((u) => u.includes('router.huggingface.co/hf-inference/models/')), `both calls are HF inference (${urls().join(' | ')})`)
+  ok(!paid(), 'FLUX/SDXL path does not call fal-ai, nscale, OpenAI, or Replicate')
 
-  // 5. Pollinations 402 honors Retry-After, stays serial, then placeholder or hard failure by mode
-  img.resetImageGenForTests(); installFetch()
+  // Fallback: HF and Gemini fail, Pollinations succeeds. Paid hosts are not called.
+  resetEnv(); installFetch(); warnings.length = 0
   process.env.DATA_DIR = dir
-  delete process.env.HF_TOKEN
-  process.env.IMAGE_PROVIDERS = 'pollinations,placeholder'
-  process.env.POLLINATIONS_MIN_INTERVAL_MS = '0'
-  let polls = 0
-  const starts: number[] = []
-  handler = async (url, init) => {
-    if (!url.includes('image.pollinations.ai')) return new Response('no', { status: 500 })
-    polls++
-    starts.push(Date.now())
-    if (!url.includes('safe=true') || !url.includes('width=768') || !url.includes('height=768')) return new Response('bad url', { status: 500 })
-    const auth = JSON.stringify(init?.headers || {})
-    if (/authorization|token|key=/i.test(url + auth)) return new Response('leaked', { status: 500 })
-    if (polls === 1) return new Response('slow down', { status: 402, headers: { 'retry-after': '0.2' } })
-    return png()
-  }
-  const queuedA = img.runFlux('prompt-a')
-  const queuedB = img.runFlux('prompt-b')
-  const [a, b] = await Promise.all([queuedA, queuedB])
-  ok(maxInFlight === 1, `queue: one Pollinations request at a time (max ${maxInFlight})`)
-  ok(a.engine === 'pollinations-classic' && b.engine === 'pollinations-classic', `402 then success (${a.engine}, ${b.engine})`)
-  ok(polls >= 3, `402 was retried (poll fetches ${polls})`)
-  const gap = starts.length >= 2 ? starts[1] - starts[0] : 0
-  ok(gap >= 150, `Retry-After 0.2s was honored (${gap} ms)`)
-  const pollsBeforeCache = polls
-  const again = await img.runFlux('prompt-a')
-  ok(again.watermark === true && again.attempts.some((x) => x.status === 'cache') && polls === pollsBeforeCache, 'repeat prompt is served from cache')
-
-  img.resetImageGenForTests(); installFetch()
-  process.env.DATA_DIR = dir
-  handler = async () => new Response('no', { status: 402, headers: { 'retry-after': '0.01' } })
-  const gaveUp = await img.runFlux('never')
-  ok(gaveUp.mocked === true && gaveUp.engine === 'offline-placeholder' && gaveUp.costMode === 'offline', `exhausted Pollinations becomes the labelled placeholder (${gaveUp.engine})`)
-  let strictErr = ''
-  try { await img.runFlux('never', { strict: true }) } catch (e: any) { strictErr = e.message }
-  ok(/refund|paid run stopped/i.test(strictErr), `strict mode fails instead of a placeholder (${strictErr.slice(0, 120)})`)
-
-  // 6. invalid JSON, content type, oversized bytes
-  img.resetImageGenForTests(); installFetch()
-  process.env.DATA_DIR = dir
-  process.env.HF_TOKEN = 'hf_test'
-  process.env.IMAGE_PROVIDERS = 'hf-fal,pollinations,placeholder'
-  process.env.POLLINATIONS_MIN_INTERVAL_MS = '0'
-  process.env.IMAGE_DOWNLOAD_MAX_BYTES = '100000'
+  process.env.HF_TOKEN = 'hf_testtokenvalue0001'
+  process.env.GEMINI_API_KEY = 'AIzaTestGeminiKey0001234567890'
+  process.env.OPENAI_API_KEY = 'sk-test-openai-key-0001'
+  process.env.REPLICATE_API_TOKEN = 'r8_testreplicatetoken0001'
   handler = async (url) => {
-    if (url.includes('/fal-ai/')) return new Response('not-json', { status: 200, headers: { 'content-type': 'application/json' } })
+    if (url.includes('router.huggingface.co')) return json(401, { error: 'unauthorized' })
+    if (url.includes('generativelanguage.googleapis.com')) return json(429, { error: { message: 'quota exceeded' } })
+    if (url.includes('image.pollinations.ai')) return png({ 'content-type': 'image/jpeg' })
+    throw new Error('unexpected ' + url)
+  }
+  const fell = await img.runFlux('a red fox')
+  ok(fell.engine === 'pollinations-classic' && fell.costMode === 'free' && fell.watermark === true, `falls through to Pollinations (${fell.engine})`)
+  const hosts = urls().map((u) => new URL(u).host)
+  ok(hosts.join(',') === 'router.huggingface.co,router.huggingface.co,generativelanguage.googleapis.com,image.pollinations.ai', `order ${hosts.join(',')}`)
+  ok(!paid(), 'unlisted paid hosts are not called')
+  const geminiCall = calls.find((c) => c.url.includes('generativelanguage'))!
+  ok(!geminiCall.url.includes('AIza'), 'Gemini key stays out of the URL')
+  ok((geminiCall.init?.headers as Record<string, string>)['x-goog-api-key']?.startsWith('AIza'), 'Gemini key is a header')
+  ok(warnings.some((l) => l.includes('huggingface failed')) && warnings.some((l) => l.includes('quota exceeded')), 'failures are logged with a short reason')
+
+  // Opt-in OpenAI workgroup error falls through and the key is not logged. Chat base URL is not the image host.
+  resetEnv(); installFetch(); warnings.length = 0
+  process.env.DATA_DIR = dir
+  const secret = 'sk-live-abcdefghijklmnopqrstuvwxyz'
+  process.env.IMAGE_PROVIDERS = 'openai,pollinations'
+  process.env.OPENAI_API_KEY = secret
+  process.env.OPENAI_BASE_URL = 'https://api.x.ai/v1'
+  handler = async (url) => {
+    if (url.includes('api.openai.com')) return json(400, { error: { message: `organization workgroup mismatch for key ${secret}` } })
     if (url.includes('image.pollinations.ai')) return png()
-    return new Response('no', { status: 500 })
+    throw new Error('unexpected ' + url)
   }
-  const badJson = await img.runFlux('json')
-  ok(badJson.engine === 'pollinations-classic' && badJson.attempts.some((x) => x.provider === 'hf-fal' && /invalid json/i.test(x.status)), 'invalid HF JSON is rejected and the chain continues')
+  const org = await img.runFlux('a red fox')
+  ok(org.engine === 'pollinations-classic', 'openai org error falls through')
+  ok(urls()[0] === 'https://api.openai.com/v1/images/generations', `opted-in openai uses api.openai.com, not OPENAI_BASE_URL (${urls()[0]})`)
+  const body = JSON.parse(String(calls[0].init?.body))
+  ok(body.model === 'gpt-image-1' && body.prompt === 'a red fox', 'openai images request uses gpt-image-1')
+  ok(!urls().some((u) => u.includes('api.x.ai')), 'image call does not follow the xAI chat base URL')
+  const joined = warnings.join('\n')
+  ok(joined.includes('workgroup') && !joined.includes(secret) && !joined.includes('sk-live'), 'workgroup failure is logged without the key')
 
-  img.resetImageGenForTests(); installFetch()
+  // Every provider that ran is named when all of them fail.
+  img.resetImageGenForTests()
+  resetEnv(); installFetch(); warnings.length = 0
   process.env.DATA_DIR = dir
-  delete process.env.HF_TOKEN
-  process.env.IMAGE_PROVIDERS = 'pollinations,placeholder'
-  handler = async () => new Response('<html>no</html>', { status: 200, headers: { 'content-type': 'text/html' } })
-  const badType = await img.runFlux('html')
-  ok(badType.engine === 'offline-placeholder' && badType.attempts.some((x) => /content-type/i.test(x.status)), `non-image content type rejected (${badType.attempts.map((x) => x.status).join('|')})`)
+  process.env.HF_TOKEN = 'hf_shouldnotleaktoken0001'
+  process.env.GEMINI_API_KEY = 'AIzaShouldNotLeak0001234567'
+  handler = async (url) => {
+    if (url.includes('router.huggingface.co')) return json(503, { error: 'model not found' })
+    if (url.includes('generativelanguage')) return json(403, { error: { message: 'billing disabled for AIzaShouldNotLeak0001234567' } })
+    if (url.includes('image.pollinations.ai')) return json(402, { error: 'rate limited' })
+    throw new Error('unexpected ' + url)
+  }
+  let message = ''
+  try { await img.runFlux('a red fox') } catch (e: any) { message = e.message }
+  ok(message.startsWith('Image generation failed. Tried huggingface'), 'all-fail names huggingface: ' + message.slice(0, 80))
+  ok(message.includes('gemini') && message.includes('pollinations'), 'all-fail names every provider that ran')
+  ok(message.includes('model not found') && message.includes('rate limited'), 'all-fail keeps the short reasons')
+  ok(!message.includes('hf_shouldnotleak') && !message.includes('AIzaShouldNotLeak'), 'error text omits keys')
+  ok(!message.includes('openai') && !message.includes('replicate'), 'untried paid providers are not blamed')
 
-  img.resetImageGenForTests(); installFetch()
+  // Nothing configured: placeholder, no request. strict refuses it.
+  resetEnv(); installFetch()
   process.env.DATA_DIR = dir
-  process.env.IMAGE_DOWNLOAD_MAX_BYTES = '10'
-  handler = async () => new Response(PNG, { status: 200, headers: { 'content-type': 'image/png', 'content-length': '999999' } })
-  const huge = await img.runFlux('huge')
-  ok(huge.mocked === true && huge.attempts.some((x) => /too large/i.test(x.status)), 'oversized image is rejected')
+  process.env.IMAGE_PROVIDERS = 'none'
+  process.env.OPENAI_API_KEY = secret
+  process.env.REPLICATE_API_TOKEN = 'r8_testreplicatetoken0001'
+  handler = async () => { throw new Error('network') }
+  const off = await img.runFlux('offline')
+  ok(off.mocked === true && off.engine === 'offline-placeholder' && urls().length === 0, 'none returns a placeholder and makes no request')
+  let strictErr = ''
+  try { await img.runFlux('offline', { strict: true }) } catch (e: any) { strictErr = e.message }
+  ok(/Image generation failed/.test(strictErr) && /refund/i.test(strictErr), `strict empty chain fails closed (${strictErr.slice(0, 100)})`)
 
-  // 7. strict pipeline rejects a missing real provider and saves no image
-  img.resetImageGenForTests(); installFetch()
-  resetEnv()
+  // Local Automatic1111, and a paid host is refused before any request.
+  resetEnv(); installFetch()
   process.env.DATA_DIR = dir
-  process.env.IMAGE_PROVIDERS = 'placeholder'
-  const ran = await pipeline.runPipeline([{ id: 'gen', type: 'flux-schnell', data: {} }], [], { prompt: 'sneaker', strict: true })
-  ok(ran.status === 'failed' && /paid run stopped|HF_TOKEN|no real image/i.test(ran.results.gen?.error || ''), `strict pipeline fails (${ran.results.gen?.error})`)
-  ok(!ran.imageUrl && ran.results.gen?.mocked !== true, 'strict pipeline does not keep a placeholder image')
-
-  // 8. agent tool reports engine and watermark
-  const tools = await import('../server/agent/tools.ts')
-  process.env.IMAGE_PROVIDERS = 'pollinations'
-  process.env.POLLINATIONS_MIN_INTERVAL_MS = '0'
-  process.env.IMAGE_DOWNLOAD_MAX_BYTES = '100000'
+  process.env.IMAGE_PROVIDERS = 'local'
+  process.env.LOCAL_IMAGE_URL = 'http://127.0.0.1:7860'
+  handler = async (url, init) => {
+    if (url.endsWith('/sdapi/v1/txt2img')) {
+      const b = JSON.parse(String(init?.body))
+      if (b.prompt !== 'local fox') return json(400, { error: 'bad prompt' })
+      return json(200, { images: [PNG.toString('base64')] })
+    }
+    throw new Error('unexpected ' + url)
+  }
+  const local = await img.runFlux('local fox')
+  ok(local.engine === 'local' && local.model === 'a1111' && urls().length === 1, 'local Automatic1111 is used when LOCAL_IMAGE_URL is set')
   img.resetImageGenForTests(); installFetch()
-  process.env.DATA_DIR = dir
-  handler = async (url) => url.includes('image.pollinations.ai') ? png() : new Response('no', { status: 500 })
-  const tool = tools.getTool('generate_image')!
-  const told = await tool.run({ prompt: 'cup' }, {} as any)
-  ok(told.engine === 'pollinations-classic' && told.watermark === true && told.costMode === 'free' && typeof told.imageUrl === 'string', `agent tool reports engine and watermark (${told.engine}, watermark ${told.watermark})`)
+  process.env.LOCAL_IMAGE_URL = 'https://api.openai.com/v1'
+  process.env.OPENAI_API_KEY = secret
+  let localMsg = ''
+  try { await img.runFlux('nope') } catch (e: any) { localMsg = e.message }
+  ok(urls().length === 0 && localMsg.includes('local') && localMsg.includes('paid host'), `local refuses api.openai.com (${localMsg.slice(0, 120)})`)
 
-  // 9. no OpenAI Images code path
-  const files: string[] = []
-  const walk = (d: string) => { for (const name of readdirSync(d)) { const p = join(d, name); if (name === 'node_modules' || name === 'dist' || name === 'vendor') continue; const st = statSync(p); if (st.isDirectory()) walk(p); else if (/\.(ts|tsx|mjs|js|html)$/.test(name)) files.push(p) } }
-  walk('server'); walk('src')
-  const blob = files.map((p) => readFileSync(p, 'utf8')).join('\n')
-  const openaiImage = /api\.openai\.com[^\n]{0,80}images|dall-e|dall_e|gpt-image/i.test(blob)
-  const nscaleIsHf = blob.includes('router.huggingface.co/nscale/v1/images/generations')
-  ok(!openaiImage && nscaleIsHf, 'no OpenAI Images call; the images/generations path is only the documented HF nscale route')
-
-  // 10. Replicate token does not upscale unless ENABLE_PAID_REPLICATE=1
-  img.resetImageGenForTests(); installFetch()
+  // Replicate image only when listed.
+  resetEnv(); installFetch()
   process.env.DATA_DIR = dir
-  process.env.REPLICATE_API_TOKEN = 'r8_test'
-  delete process.env.ENABLE_PAID_REPLICATE
+  process.env.IMAGE_PROVIDERS = 'replicate'
+  process.env.REPLICATE_API_TOKEN = 'r8_testreplicatetoken0001'
+  handler = async (url) => {
+    if (url.includes('api.replicate.com')) return json(201, { status: 'succeeded', output: 'https://cdn.example/out.png' })
+    if (url === 'https://cdn.example/out.png') return png()
+    throw new Error('unexpected ' + url)
+  }
+  const rep = await img.runFlux('rep fox')
+  ok(rep.engine === 'replicate' && urls()[0].includes('/models/black-forest-labs/flux-schnell/predictions'), 'replicate image runs only when listed')
+
+  // Upscale: token alone, flag alone, and list alone do not call Replicate.
   const tiny = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#336699' } }).png().toBuffer()
+  resetEnv(); installFetch()
+  process.env.DATA_DIR = dir
+  process.env.REPLICATE_API_TOKEN = 'r8_testreplicatetoken0001'
+  process.env.ENABLE_PAID_REPLICATE = '1'
   handler = async () => { throw new Error('replicate must not be called') }
-  const resized = await services.runUpscaler(tiny, 2)
-  ok(resized.engine === 'sharp-lanczos3-resize' && resized.kind === 'resize' && urls().length === 0, `default upscale is a Sharp resize (${resized.engine}, calls ${urls().length})`)
+  const flagged = await services.runUpscaler(tiny, 2)
+  ok(flagged.engine === 'sharp-lanczos3-resize' && flagged.kind === 'resize' && urls().length === 0, 'ENABLE_PAID_REPLICATE=1 without a listing does not call Replicate')
+  process.env.IMAGE_PROVIDERS = 'replicate'
+  process.env.ENABLE_PAID_REPLICATE = '0'
+  const listedOnly = await services.runUpscaler(tiny, 2)
+  ok(listedOnly.kind === 'resize' && urls().length === 0, 'listing replicate with the flag at 0 does not upscale on Replicate')
   process.env.ENABLE_PAID_REPLICATE = '1'
   installFetch()
   handler = async (url) => {
@@ -254,12 +218,46 @@ try {
     if (url.includes('cdn.example/up.png')) return png()
     return new Response('no', { status: 500 })
   }
-  const paid = await services.runUpscaler(tiny, 2)
-  ok(paid.engine === 'replicate-real-esrgan' && paid.kind === 'ai-upscale' && urls().some((u) => u.includes('api.replicate.com')), 'ENABLE_PAID_REPLICATE=1 is required before Replicate is called')
+  const paidUp = await services.runUpscaler(tiny, 2)
+  ok(paidUp.engine === 'replicate-real-esrgan' && paidUp.kind === 'ai-upscale' && urls().some((u) => u.includes('api.replicate.com')), 'upscale needs the list, the token, and ENABLE_PAID_REPLICATE=1')
+
+  // Pollinations stays one-at-a-time and retries 402.
+  resetEnv(); installFetch()
+  process.env.DATA_DIR = dir
+  process.env.IMAGE_PROVIDERS = 'pollinations'
+  let polls = 0
+  handler = async (url) => {
+    if (!url.includes('image.pollinations.ai')) return new Response('no', { status: 500 })
+    polls++
+    if (polls === 1) return new Response('slow down', { status: 402, headers: { 'retry-after': '0.05', 'content-type': 'application/json' } })
+    return png()
+  }
+  const queuedA = img.runFlux('prompt-a')
+  const queuedB = img.runFlux('prompt-b')
+  const [a, b] = await Promise.all([queuedA, queuedB])
+  ok(maxInFlight === 1, `one Pollinations request at a time (max ${maxInFlight})`)
+  ok(a.engine === 'pollinations-classic' && b.engine === 'pollinations-classic' && polls >= 3, `402 then success (polls ${polls})`)
+
+  // Strict pipeline does not keep a placeholder.
+  resetEnv(); installFetch()
+  process.env.DATA_DIR = dir
+  process.env.IMAGE_PROVIDERS = 'placeholder'
+  const ran = await pipeline.runPipeline([{ id: 'gen', type: 'flux-schnell', data: {} }], [], { prompt: 'sneaker', strict: true })
+  ok(ran.status === 'failed' && /Image generation failed|refund/i.test(ran.results.gen?.error || ''), `strict pipeline fails (${ran.results.gen?.error})`)
+  ok(!ran.imageUrl, 'strict pipeline does not keep a placeholder image')
+
+  // No fal-ai or nscale image route remains in the server.
+  const files: string[] = []
+  const walk = (d: string) => { for (const name of readdirSync(d)) { const p = join(d, name); if (name === 'node_modules' || name === 'dist' || name === 'vendor') continue; const st = statSync(p); if (st.isDirectory()) walk(p); else if (/\.(ts|tsx|mjs|js)$/.test(name)) files.push(p) } }
+  walk('server'); walk('src')
+  const blob = files.map((p) => readFileSync(p, 'utf8')).join('\n')
+  ok(!blob.includes('router.huggingface.co/fal-ai') && !blob.includes('/nscale/'), 'fal-ai and nscale image routes are gone')
+  ok(blob.includes('https://api.openai.com/v1') && blob.includes('IMAGE_PROVIDERS'), 'OpenAI images exist only behind the provider list')
 } catch (e: any) {
   console.error('THREW', e)
   failures++
 } finally {
+  console.warn = origWarn
   img.resetImageGenForTests()
   for (const [k, v] of Object.entries(saved)) {
     if (v === undefined) delete process.env[k]

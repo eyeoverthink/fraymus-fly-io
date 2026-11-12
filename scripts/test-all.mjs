@@ -23,7 +23,7 @@ const run = (file) => new Promise((res) => (file.endsWith('.ts') ? spawn(win ? '
 
 let failed = 0
 try {
-  for (const f of ['scripts/test-image-generation.ts', 'scripts/test-organism.ts', 'scripts/test-ngram.ts']) {
+  for (const f of ['scripts/test-image-generation.ts', 'scripts/test-llm-router.ts', 'scripts/test-organism.ts', 'scripts/test-ngram.ts']) {
     console.log(`\n== ${f}`)
     if (await run(f)) failed++
   }

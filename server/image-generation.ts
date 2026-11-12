@@ -1,15 +1,15 @@
-// Free-first image generation. runFlux is the only image entry point.
-// Default chain: Hugging Face fal-ai FLUX.1-schnell (included PRO credits, local USD cap)
-// -> Pollinations Classic anonymous (watermark, one at a time)
-// -> a labelled offline placeholder.
-// Strict/buyer runs use BUYER_IMAGE_PROVIDERS (default hf-fal) and fail instead of a placeholder.
-// OpenAI Images and Replicate are not image providers. Gemini and the local worker stay off
-// unless the owner names them and sets their confirmation flags.
-import { mkdirSync, rmSync } from 'node:fs'
-import { dirname } from 'node:path'
+// Free-first image generation. runFlux is the only image entry point
+// (canvas, /api/flux, buyer pipeline, generate_image).
+//
+// Default order: Hugging Face inference (FLUX.1-schnell, then SDXL) -> Gemini
+// (only when GEMINI_API_KEY is set; Google lists no free tier for that image model)
+// -> Pollinations (no key) -> a local server (LOCAL_IMAGE_URL).
+// OpenAI Images and Replicate are called only when that name is listed in
+// IMAGE_PROVIDERS and its key is set. A key alone does nothing.
+// If every provider that actually ran fails, the error names each one and why.
 import sharp from 'sharp'
 
-export type CostMode = 'included-credit' | 'free' | 'offline'
+export type CostMode = 'free' | 'paid' | 'included-credit' | 'offline'
 export type ImageAttempt = { provider: string; status: string; durationMs: number }
 export type ImageResult = {
   png: Buffer
@@ -23,22 +23,14 @@ export type ImageResult = {
   attempts: ImageAttempt[]
 }
 
-const FAL_IDS: Record<string, string> = {
-  'black-forest-labs/FLUX.1-schnell': 'fal-ai/flux/schnell',
-  'black-forest-labs/FLUX.1-dev': 'fal-ai/flux/dev'
-}
-const HF_W = 1024
-const HF_H = 1024
-const PAID_NAMES = new Set(['openai', 'replicate'])
+export const DEFAULT_IMAGE_PROVIDERS = ['huggingface', 'gemini', 'pollinations', 'local'] as const
+export const PAID_IMAGE_PROVIDERS = ['openai', 'replicate'] as const
+const KNOWN = new Set<string>([...DEFAULT_IMAGE_PROVIDERS, ...PAID_IMAGE_PROVIDERS, 'placeholder'])
+const SECRET_ENV = ['HF_TOKEN', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'REPLICATE_API_TOKEN', 'LOCAL_IMAGE_TOKEN', 'PROMPT_LLM_API_KEY', 'XAI_API_KEY'] as const
 
 let fetchOverride: typeof fetch | null = null
-let budget: any = null
-let budgetPath = ''
-let budgetOpen: Promise<void> | null = null
-let budgetGate: Promise<void> = Promise.resolve()
 const pollCache = new Map<string, Buffer>()
 let pollTail: Promise<void> = Promise.resolve()
-let pollLastStarted = 0
 
 export function setImageFetchForTests(fn: typeof fetch | null) {
   fetchOverride = fn
@@ -47,260 +39,212 @@ export function imageFetch(input: RequestInfo | URL, init?: RequestInit) {
   return (fetchOverride || globalThis.fetch)(input, init)
 }
 
-function truthy(v: string | undefined) {
-  return !!v && !['0', 'off', 'false', 'no'].includes(v.trim().toLowerCase())
-}
 function num(v: string | undefined, fallback: number) {
   if (v == null || v.trim() === '') return fallback
   const n = Number(v)
   return Number.isFinite(n) ? n : fallback
 }
-function timeoutMs() { return Math.max(1000, num(process.env.IMAGE_GENERATION_TIMEOUT_MS, 120_000)) }
+function timeoutMs() { return Math.max(1000, num(process.env.IMAGE_GENERATION_TIMEOUT_MS, 90_000)) }
 function maxBytes() { return Math.max(1024, num(process.env.IMAGE_DOWNLOAD_MAX_BYTES, 25_000_000)) }
-function monthlyCap() { return Math.max(0, num(process.env.IMAGE_MONTHLY_CREDIT_CAP_USD, 1.5)) }
-function pricePerMp() { return Math.max(0, num(process.env.HF_IMAGE_PRICE_PER_MEGAPIXEL_USD, 0.003)) }
-function pollGapMs() { return Math.max(0, num(process.env.POLLINATIONS_MIN_INTERVAL_MS, 46_000)) }
-function monthKey(d = new Date()) { return d.toISOString().slice(0, 7) }
-function modelId() { return process.env.HF_FLUX_MODEL || 'black-forest-labs/FLUX.1-schnell' }
-function estimateUsd(w: number, h: number) { return (w * h / 1_000_000) * pricePerMp() }
-function overrunAllowed() { return truthy(process.env.IMAGE_ALLOW_PAID_OVERRUN) }
 
-export function imageProviderPlan(opts: { strict?: boolean } = {}): string[] {
+export function redactSecrets(text: string, env: NodeJS.ProcessEnv = process.env): string {
+  let s = String(text || '')
+  for (const key of SECRET_ENV) {
+    const value = env[key]?.trim()
+    if (value && value.length >= 8) s = s.split(value).join('[redacted]')
+  }
+  return s
+    .replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, 'Bearer [redacted]')
+    .replace(/\b(sk-[A-Za-z0-9_\-]{8,})\b/g, '[redacted]')
+    .replace(/\b(hf_[A-Za-z0-9]{8,})\b/g, '[redacted]')
+    .replace(/\b(AIza[0-9A-Za-z_\-]{10,})\b/g, '[redacted]')
+    .replace(/\b(r8_[A-Za-z0-9]{8,})\b/g, '[redacted]')
+    .replace(/([?&](?:key|api_key|token|access_token)=)[^&\s"]+/gi, '$1[redacted]')
+}
+
+function clip(s: string, max = 180) {
+  return redactSecrets(s).replace(/\s+/g, ' ').trim().slice(0, max)
+}
+
+/** Names from IMAGE_PROVIDERS (or the buyer list when strict). `hf-fal` is the free HF inference alias, not fal-ai. */
+export function listedImageProviders(opts: { strict?: boolean } = {}): string[] {
   const raw = opts.strict
-    ? (process.env.BUYER_IMAGE_PROVIDERS || 'hf-fal')
-    : (process.env.IMAGE_PROVIDERS || 'hf-fal,pollinations,placeholder')
-  return raw.split(',').map((s) => s.trim().toLowerCase()).filter((name) => {
-    if (!name || PAID_NAMES.has(name)) return false
-    if (opts.strict && name === 'placeholder') return false
-    return true
-  })
-}
-
-function hfEnabled() {
-  const flag = process.env.HF_IMAGE_ENABLED
-  if (flag != null && flag.trim() !== '' && !truthy(flag)) return false
-  return !!process.env.HF_TOKEN
-}
-
-function exclusive<T>(fn: () => Promise<T>): Promise<T> {
-  const run = budgetGate.then(fn, fn)
-  budgetGate = run.then(() => undefined, () => undefined)
-  return run
-}
-
-async function budgetDb() {
-  const path = `${process.env.DATA_DIR || './data'}/image-budget.sqlite`
-  if (budget && budgetPath === path) return budget
-  if (!budgetOpen) {
-    budgetOpen = (async () => {
-      if (budget) { try { budget.close() } catch { /* already closed */ } budget = null }
-      mkdirSync(dirname(path), { recursive: true })
-      const { DatabaseSync } = await import('node:sqlite')
-      budget = new DatabaseSync(path)
-      budget.exec(`create table if not exists image_calls (
-        id integer primary key autoincrement,
-        month text not null,
-        provider text not null,
-        status text not null,
-        estimated_usd real not null,
-        actual_usd real,
-        width integer,
-        height integer,
-        created_at integer not null
-      )`)
-      budgetPath = path
-    })()
+    ? (process.env.BUYER_IMAGE_PROVIDERS ?? 'huggingface')
+    : process.env.IMAGE_PROVIDERS
+  const source = raw === undefined ? DEFAULT_IMAGE_PROVIDERS.join(',') : raw
+  const names = source.split(',').map((s) => s.trim().toLowerCase()).filter((n) => n && n !== 'none')
+  if (!names.length || names.every((n) => n === 'none')) return []
+  const out: string[] = []
+  for (const name of names) {
+    const mapped = name === 'hf-fal' ? 'huggingface' : name
+    if (opts.strict && mapped === 'placeholder') continue
+    if (!out.includes(mapped)) out.push(mapped)
   }
-  await budgetOpen
-  budgetOpen = null
-  return budget
+  return out
 }
 
-/** Sum of estimates for in-flight and succeeded HF calls this UTC month. Failed rows stay for the log and do not count. */
-export async function hfReservedUsd(): Promise<number> {
-  const db = await budgetDb()
-  const row = db.prepare(`select coalesce(sum(estimated_usd), 0) as spent from image_calls where month = ? and status in ('reserved', 'succeeded')`).get(monthKey()) as { spent: number }
-  return Number(row?.spent) || 0
-}
-
-export async function imageCalls(): Promise<any[]> {
-  const db = await budgetDb()
-  return db.prepare('select id, month, provider, status, estimated_usd, actual_usd, width, height from image_calls order by id').all()
-}
-
-async function reserveHf(estimate: number): Promise<{ id: number } | { blocked: true }> {
-  return exclusive(() => reserveHfBody(estimate))
-}
-
-async function reserveHfBody(estimate: number): Promise<{ id: number } | { blocked: true }> {
-  const db = await budgetDb()
-  const month = monthKey()
-  db.exec('BEGIN IMMEDIATE')
-  try {
-    const row = db.prepare(`select coalesce(sum(estimated_usd), 0) as spent from image_calls where month = ? and status in ('reserved', 'succeeded')`).get(month) as { spent: number }
-    const spent = Number(row?.spent) || 0
-    if (!overrunAllowed() && spent + estimate > monthlyCap() + 1e-9) {
-      db.prepare(`insert into image_calls (month, provider, status, estimated_usd, created_at) values (?, 'hf-fal', 'cap-blocked', 0, ?)`).run(month, Date.now())
-      db.exec('COMMIT')
-      return { blocked: true }
-    }
-    const info = db.prepare(`insert into image_calls (month, provider, status, estimated_usd, created_at) values (?, 'hf-fal', 'reserved', ?, ?)`).run(month, estimate, Date.now())
-    db.exec('COMMIT')
-    return { id: Number(info.lastInsertRowid) }
-  } catch (e) {
-    try { db.exec('ROLLBACK') } catch { /* no open transaction */ }
-    throw e
+function configured(name: string): boolean {
+  switch (name) {
+    case 'huggingface': return !!process.env.HF_TOKEN?.trim()
+    case 'gemini': return !!process.env.GEMINI_API_KEY?.trim()
+    case 'pollinations': return true
+    case 'local': return !!(process.env.LOCAL_IMAGE_URL || process.env.LOCAL_IMAGE_ENDPOINT || '').trim()
+    case 'openai': return !!process.env.OPENAI_API_KEY?.trim()
+    case 'replicate': return !!process.env.REPLICATE_API_TOKEN?.trim()
+    case 'placeholder': return true
+    default: return false
   }
 }
 
-async function finishHf(id: number, width: number, height: number) {
-  const db = await budgetDb()
-  const actual = estimateUsd(width, height)
-  db.prepare(`update image_calls set status = 'succeeded', actual_usd = ?, width = ?, height = ? where id = ?`).run(actual, width, height, id)
+function skipReason(name: string): string {
+  switch (name) {
+    case 'huggingface': return 'HF_TOKEN not set'
+    case 'gemini': return 'GEMINI_API_KEY not set'
+    case 'local': return 'LOCAL_IMAGE_URL not set'
+    case 'openai': return 'OPENAI_API_KEY not set'
+    case 'replicate': return 'REPLICATE_API_TOKEN not set'
+    default: return 'unknown provider'
+  }
 }
 
-async function releaseHf(id: number) {
-  const db = await budgetDb()
-  db.prepare(`update image_calls set status = 'failed', actual_usd = 0 where id = ?`).run(id)
+/** Providers that will actually be called, in order. Paid names stay out unless listed and keyed. */
+export function imageProviderPlan(opts: { strict?: boolean } = {}): string[] {
+  return listedImageProviders(opts).filter((name) => KNOWN.has(name) && configured(name) && name !== 'placeholder')
 }
 
-function stopHf(status: number) {
-  return status === 401 || status === 402 || status === 403 || status === 429 || status >= 500
+/** Replicate upscale is off unless the name is listed, the token is set, and ENABLE_PAID_REPLICATE=1. */
+export function replicateUpscaleOptIn(): boolean {
+  const listed = (process.env.IMAGE_PROVIDERS || '').split(',').map((s) => s.trim().toLowerCase()).includes('replicate')
+  return listed && process.env.ENABLE_PAID_REPLICATE === '1' && !!process.env.REPLICATE_API_TOKEN?.trim()
+}
+
+function escapeXml(s: string) {
+  return s.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c] as string))
 }
 
 async function readLimited(res: Response): Promise<Buffer> {
   const declared = Number(res.headers.get('content-length') || 0)
-  if (declared > maxBytes()) throw Object.assign(new Error(`image too large (${declared} bytes)`), { kind: 'rejected' })
+  if (declared > maxBytes()) throw new Error(`image too large (${declared} bytes)`)
   const buf = Buffer.from(await res.arrayBuffer())
-  if (buf.length > maxBytes()) throw Object.assign(new Error(`image too large (${buf.length} bytes)`), { kind: 'rejected' })
+  if (buf.length > maxBytes()) throw new Error(`image too large (${buf.length} bytes)`)
   return buf
 }
 
 async function normalizePng(raw: Buffer): Promise<{ png: Buffer; width: number; height: number }> {
   let meta: sharp.Metadata
   try { meta = await sharp(raw, { limitInputPixels: 4096 * 4096 }).metadata() } catch {
-    throw Object.assign(new Error('invalid image bytes'), { kind: 'rejected' })
+    throw new Error('response was not a decodable image')
   }
   const width = meta.width || 0
   const height = meta.height || 0
-  if (!width || !height || width * height > 4096 * 4096) throw Object.assign(new Error('decoded image too large'), { kind: 'rejected' })
+  if (!width || !height || width * height > 4096 * 4096) throw new Error('decoded image too large')
   const png = await sharp(raw, { limitInputPixels: 4096 * 4096 }).png().toBuffer()
-  if (png.length > maxBytes()) throw Object.assign(new Error('normalized png too large'), { kind: 'rejected' })
+  if (png.length > maxBytes()) throw new Error('normalized png too large')
   return { png, width, height }
 }
 
-function hfNames(): string[] {
-  if (process.env.HF_FLUX_URL) return ['url']
-  const names = (process.env.HF_FLUX_PROVIDER || 'fal-ai').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
-  return names.filter((n) => n === 'fal-ai' || n === 'nscale' || n === 'url')
+function isImage(buf: Buffer, contentType: string): boolean {
+  const ct = contentType.split(';')[0].trim().toLowerCase()
+  if (ct.startsWith('text/') || ct.includes('json') || ct.includes('html') || ct.includes('xml')) return false
+  if (buf.length < 32) return false
+  const png = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47
+  const jpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff
+  const webp = buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP'
+  const gif = buf.toString('ascii', 0, 6) === 'GIF87a' || buf.toString('ascii', 0, 6) === 'GIF89a'
+  if (png || jpeg || webp || gif) return true
+  return ct.startsWith('image/')
 }
 
-async function hfOnce(name: string, prompt: string): Promise<Buffer> {
-  const token = process.env.HF_TOKEN || ''
-  const model = modelId()
-  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  const signal = AbortSignal.timeout(timeoutMs())
-  const steps = /schnell/i.test(model) ? 4 : 28
-  if (name === 'nscale') {
-    const r = await imageFetch('https://router.huggingface.co/nscale/v1/images/generations', {
-      signal, method: 'POST', headers,
-      body: JSON.stringify({ model, prompt, size: `${HF_W}x${HF_H}`, response_format: 'b64_json' })
-    })
-    const text = await r.text()
-    if (!r.ok) throw Object.assign(new Error(`${r.status}: ${text.slice(0, 160)}`), { status: r.status })
-    let b64 = ''
-    try { b64 = JSON.parse(text)?.data?.[0]?.b64_json || '' } catch { throw Object.assign(new Error('invalid json'), { kind: 'rejected' }) }
-    if (!b64) throw Object.assign(new Error('invalid json'), { kind: 'rejected' })
-    return Buffer.from(b64, 'base64')
-  }
-  if (name === 'fal-ai') {
-    const id = FAL_IDS[model]
-    if (!id) throw new Error(`no fal-ai mapping for ${model}`)
-    const r = await imageFetch(`https://router.huggingface.co/fal-ai/${id}`, {
-      signal, method: 'POST', headers,
-      body: JSON.stringify({ prompt, num_inference_steps: steps, image_size: { width: HF_W, height: HF_H } })
-    })
-    const text = await r.text()
-    if (!r.ok) throw Object.assign(new Error(`${r.status}: ${text.slice(0, 160)}`), { status: r.status })
-    let imgUrl = ''
-    try { imgUrl = JSON.parse(text)?.images?.[0]?.url || '' } catch { throw Object.assign(new Error('invalid json'), { kind: 'rejected' }) }
-    if (!imgUrl) throw Object.assign(new Error('invalid json'), { kind: 'rejected' })
-    const ir = await imageFetch(imgUrl, { signal })
-    if (!ir.ok) throw Object.assign(new Error(`image download ${ir.status}`), { status: ir.status })
-    return readLimited(ir)
-  }
-  const url = process.env.HF_FLUX_URL || `https://router.huggingface.co/hf-inference/models/${model}`
-  const r = await imageFetch(url, {
-    signal, method: 'POST', headers,
-    body: JSON.stringify({ inputs: prompt, parameters: { num_inference_steps: steps, guidance_scale: 0 } })
-  })
-  if (!r.ok) throw Object.assign(new Error(`${r.status}: ${(await r.text()).slice(0, 160)}`), { status: r.status })
-  return readLimited(r)
+function errorDetail(status: number, text: string): string {
+  let detail = text
+  try {
+    const j = JSON.parse(text)
+    const inner = j?.error?.message || j?.error?.error || (typeof j?.error === 'string' ? j.error : '') || j?.detail || j?.message || ''
+    if (inner) detail = typeof inner === 'string' ? inner : JSON.stringify(inner)
+  } catch { /* body is not JSON */ }
+  return clip(`${status} ${detail}`)
 }
 
-async function tryHf(prompt: string, attempts: ImageAttempt[]): Promise<ImageResult | null> {
-  const t0 = Date.now()
-  if (!hfEnabled()) {
-    attempts.push({ provider: 'hf-fal', status: process.env.HF_TOKEN ? 'disabled' : 'no-token', durationMs: 0 })
-    return null
-  }
-  const estimate = estimateUsd(HF_W, HF_H)
-  const slot = await reserveHf(estimate)
-  if ('blocked' in slot) {
-    attempts.push({ provider: 'hf-fal', status: 'cap-exceeded', durationMs: Date.now() - t0 })
-    return null
-  }
-  const names = hfNames()
-  let last = 'no hf provider'
-  let stop = false
-  for (const name of names) {
-    if (stop) break
+async function postJson(url: string, headers: Record<string, string>, body: unknown, ms = timeoutMs()): Promise<Response> {
+  return imageFetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) })
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+function hfModels(): string[] {
+  if (process.env.HF_IMAGE_MODEL?.trim()) return [process.env.HF_IMAGE_MODEL.trim()]
+  return (process.env.HF_IMAGE_MODELS || 'black-forest-labs/FLUX.1-schnell,stabilityai/stable-diffusion-xl-base-1.0')
+    .split(',').map((s) => s.trim()).filter(Boolean)
+}
+
+async function fromHuggingFace(prompt: string): Promise<{ png: Buffer; model: string }> {
+  const errors: string[] = []
+  for (const model of hfModels()) {
+    const schnell = /schnell/i.test(model)
     try {
-      const raw = await hfOnce(name, prompt)
-      const norm = await normalizePng(raw)
-      await finishHf(slot.id, norm.width, norm.height)
-      attempts.push({ provider: 'hf-fal', status: 'succeeded', durationMs: Date.now() - t0 })
-      return {
-        png: norm.png, mocked: false, engine: 'hf-fal', model: modelId(), costMode: 'included-credit',
-        width: norm.width, height: norm.height, watermark: false, attempts
-      }
+      const res = await postJson(`https://router.huggingface.co/hf-inference/models/${model}`, {
+        Authorization: `Bearer ${process.env.HF_TOKEN}`,
+        'Content-Type': 'application/json',
+        Accept: 'image/png'
+      }, { inputs: prompt, parameters: { num_inference_steps: schnell ? 4 : 20, guidance_scale: schnell ? 0 : 7.5 } })
+      const buf = await readLimited(res)
+      const ct = res.headers.get('content-type') || ''
+      if (res.ok && isImage(buf, ct)) return { png: buf, model }
+      errors.push(`${model} ${errorDetail(res.status, buf.toString('utf8').slice(0, 400))}`)
     } catch (e: any) {
-      last = e?.message || String(e)
-      const status = Number(e?.status) || 0
-      if (stopHf(status)) stop = true
+      errors.push(`${model} ${clip(e?.message || String(e))}`)
     }
   }
-  await releaseHf(slot.id)
-  attempts.push({ provider: 'hf-fal', status: last.slice(0, 160), durationMs: Date.now() - t0 })
-  return null
+  throw new Error(errors.join('; ') || 'no Hugging Face image model configured')
 }
 
-function pollCacheKey(prompt: string) { return `${prompt.trim()}\n768x768\nsafe` }
+async function fromGemini(prompt: string): Promise<{ png: Buffer; model: string }> {
+  const model = process.env.GEMINI_IMAGE_MODEL?.trim() || 'gemini-2.5-flash-image'
+  const res = await postJson(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    'Content-Type': 'application/json',
+    'x-goog-api-key': process.env.GEMINI_API_KEY || ''
+  }, {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+  })
+  const text = (await readLimited(res)).toString('utf8')
+  if (!res.ok) throw new Error(errorDetail(res.status, text.slice(0, 500)))
+  let parsed: any
+  try { parsed = JSON.parse(text) } catch { throw new Error(errorDetail(res.status, text.slice(0, 400))) }
+  const parts = parsed?.candidates?.[0]?.content?.parts || []
+  let data = ''
+  for (const part of parts) {
+    const inline = part.inlineData || part.inline_data
+    if (inline?.data) { data = inline.data; break }
+  }
+  if (!data) throw new Error(String(parsed?.promptFeedback?.blockReason || parsed?.candidates?.[0]?.finishReason || 'response had no image'))
+  return { png: Buffer.from(data, 'base64'), model }
+}
+
+function pollCacheKey(prompt: string) { return `${prompt.trim()}\n768x768` }
 
 async function fetchPollinations(prompt: string): Promise<Buffer> {
-  const seed = Math.floor(Math.random() * 1_000_000_000) + 1
-  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=768&safe=true&seed=${seed}`
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=768&nologo=true&model=flux`
   let last = 'pollinations failed'
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const r = await imageFetch(url, {
+    const res = await imageFetch(url, {
       signal: AbortSignal.timeout(timeoutMs()),
-      headers: { Accept: 'image/*', 'User-Agent': 'fraymus-fly-io/image-gen' }
+      headers: { Accept: 'image/jpeg, image/png', 'User-Agent': 'fraymus-fly-io/image-gen' }
     })
-    if (r.status === 402 || r.status === 429 || r.status >= 500) {
-      last = `${r.status}`
+    if (res.status === 402 || res.status === 429 || res.status >= 500) {
+      last = errorDetail(res.status, (await res.text()).slice(0, 200))
       if (attempt < 2) {
-        const retryAfter = Number(r.headers.get('retry-after'))
+        const retryAfter = Number(res.headers.get('retry-after'))
         const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000
-        await new Promise((res) => setTimeout(res, Math.min(wait, timeoutMs() / 4)))
+        await sleep(Math.min(wait, timeoutMs() / 4))
         continue
       }
       throw new Error(last)
     }
-    if (!r.ok) throw new Error(`${r.status}`)
-    const ct = r.headers.get('content-type') || ''
-    if (!ct.startsWith('image/')) throw Object.assign(new Error(`content-type ${ct || 'missing'}`), { kind: 'rejected' })
-    const buf = await readLimited(r)
-    return (await normalizePng(buf)).png
+    const buf = await readLimited(res)
+    const ct = res.headers.get('content-type') || ''
+    if (!res.ok || !isImage(buf, ct)) throw new Error(errorDetail(res.status, ct ? `content-type ${ct}` : buf.toString('utf8').slice(0, 200)))
+    return buf
   }
   throw new Error(last)
 }
@@ -310,26 +254,24 @@ function pollinations(prompt: string, attempts: ImageAttempt[]): Promise<ImageRe
   const hit = pollCache.get(key)
   if (hit) {
     attempts.push({ provider: 'pollinations', status: 'cache', durationMs: 0 })
-    return Promise.resolve(pollResult(hit, attempts))
+    return Promise.resolve(done('pollinations-classic', 'flux', 'free', hit, attempts, true))
   }
   const job = pollTail.then(async () => {
     const again = pollCache.get(key)
     if (again) {
       attempts.push({ provider: 'pollinations', status: 'cache', durationMs: 0 })
-      return pollResult(again, attempts)
+      return done('pollinations-classic', 'flux', 'free', again, attempts, true)
     }
-    const wait = pollLastStarted ? Math.max(0, pollLastStarted + pollGapMs() - Date.now()) : 0
-    if (wait) await new Promise((res) => setTimeout(res, wait))
     const t0 = Date.now()
-    pollLastStarted = Date.now()
     try {
-      const png = await fetchPollinations(prompt)
-      pollCache.set(key, png)
+      const raw = await fetchPollinations(prompt)
+      const norm = await normalizePng(raw)
+      pollCache.set(key, norm.png)
       if (pollCache.size > 64) pollCache.delete(pollCache.keys().next().value as string)
       attempts.push({ provider: 'pollinations', status: 'succeeded', durationMs: Date.now() - t0 })
-      return pollResult(png, attempts)
+      return done('pollinations-classic', 'flux', 'free', norm.png, attempts, true, norm.width, norm.height)
     } catch (e: any) {
-      attempts.push({ provider: 'pollinations', status: String(e?.message || e).slice(0, 160), durationMs: Date.now() - t0 })
+      attempts.push({ provider: 'pollinations', status: clip(e?.message || String(e)), durationMs: Date.now() - t0 })
       return null
     }
   })
@@ -337,83 +279,185 @@ function pollinations(prompt: string, attempts: ImageAttempt[]): Promise<ImageRe
   return job
 }
 
-function pollResult(png: Buffer, attempts: ImageAttempt[]): ImageResult {
-  return {
-    png, mocked: false, engine: 'pollinations-classic', model: 'pollinations-classic', costMode: 'free',
-    watermark: true, attempts
+function assertNotPaidHost(raw: string) {
+  let host = ''
+  try { host = new URL(raw).hostname.toLowerCase() } catch { throw new Error('LOCAL_IMAGE_URL is not a valid URL') }
+  if (host === 'api.openai.com' || host.endsWith('.openai.com') || host === 'api.replicate.com' || host.endsWith('.replicate.com')) {
+    throw new Error('local image URL points at a paid host; list openai or replicate in IMAGE_PROVIDERS to opt in')
   }
 }
 
-async function tryGemini(prompt: string, attempts: ImageAttempt[]): Promise<ImageResult | null> {
-  const t0 = Date.now()
-  const key = process.env.GEMINI_API_KEY
-  const included = process.env.GEMINI_IMAGE_INCLUDED_CREDIT_ONLY === 'true'
-  const confirmed = process.env.GEMINI_IMAGE_BILLING_CONFIRMED === 'true'
-  if (!key || !included || !confirmed) {
-    attempts.push({ provider: 'gemini', status: 'disabled', durationMs: 0 })
-    return null
-  }
-  const model = process.env.GEMINI_IMAGE_MODEL || 'gemini-nano-banana-2.1'
-  const r = await imageFetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST', signal: AbortSignal.timeout(timeoutMs()),
-    headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] })
-  })
-  const text = await r.text()
-  if (!r.ok || /billing|quota|RESOURCE_EXHAUSTED/i.test(text)) {
-    attempts.push({ provider: 'gemini', status: `http-${r.status}`, durationMs: Date.now() - t0 })
-    return null
-  }
-  try {
-    const parts = JSON.parse(text)?.candidates?.[0]?.content?.parts || []
-    const data = parts.map((p: any) => p.inlineData?.data || p.inline_data?.data).find(Boolean) || ''
-    if (!data) throw new Error('no-image')
-    const norm = await normalizePng(Buffer.from(data, 'base64'))
-    attempts.push({ provider: 'gemini', status: 'succeeded', durationMs: Date.now() - t0 })
-    return {
-      png: norm.png, mocked: false, engine: 'gemini', model, costMode: 'included-credit',
-      width: norm.width, height: norm.height, watermark: false, attempts
-    }
-  } catch (e: any) {
-    attempts.push({ provider: 'gemini', status: String(e?.message || 'no-image').slice(0, 160), durationMs: Date.now() - t0 })
-    return null
-  }
+function joinPath(base: string, path: string): string {
+  const b = base.replace(/\/$/, '')
+  return b.endsWith(path) ? b : b + path
 }
 
-async function tryLocal(prompt: string, attempts: ImageAttempt[]): Promise<ImageResult | null> {
-  const t0 = Date.now()
-  const endpoint = process.env.LOCAL_IMAGE_ENDPOINT
-  if (!endpoint) {
-    attempts.push({ provider: 'local', status: 'Local image worker offline', durationMs: 0 })
-    return null
-  }
+function localBase(): string {
+  return (process.env.LOCAL_IMAGE_URL || process.env.LOCAL_IMAGE_ENDPOINT || '').trim()
+}
+
+async function fromLocal(prompt: string): Promise<{ png: Buffer; model: string }> {
+  const base = localBase()
+  assertNotPaidHost(base)
+  const kind = (process.env.LOCAL_IMAGE_KIND || 'a1111').trim().toLowerCase()
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'image/png, application/json' }
-  if (process.env.LOCAL_IMAGE_TOKEN) headers.Authorization = `Bearer ${process.env.LOCAL_IMAGE_TOKEN}`
-  try {
-    const r = await imageFetch(endpoint, {
-      method: 'POST', signal: AbortSignal.timeout(timeoutMs()), headers,
-      body: JSON.stringify({ prompt, width: 768, height: 768 })
-    })
-    if (!r.ok) throw new Error('Local image worker offline')
-    const ct = r.headers.get('content-type') || ''
-    const raw = ct.includes('json')
-      ? Buffer.from((JSON.parse(await r.text())?.image || ''), 'base64')
-      : await readLimited(r)
-    const norm = await normalizePng(raw)
-    attempts.push({ provider: 'local', status: 'succeeded', durationMs: Date.now() - t0 })
-    return {
-      png: norm.png, mocked: false, engine: 'local-comfyui', model: 'local-comfyui', costMode: 'free',
-      width: norm.width, height: norm.height, watermark: false, attempts
-    }
-  } catch (e: any) {
-    attempts.push({ provider: 'local', status: 'Local image worker offline', durationMs: Date.now() - t0 })
-    console.warn('[image] local worker offline:', String(e?.message || e).slice(0, 120))
-    return null
+  if (process.env.LOCAL_IMAGE_TOKEN?.trim()) headers.Authorization = `Bearer ${process.env.LOCAL_IMAGE_TOKEN.trim()}`
+  if (kind === 'comfy') return fromComfy(prompt, base, headers)
+  if (kind === 'openai' || kind === 'ollama') return fromLocalOpenAI(prompt, base, headers)
+  if (kind === 'json') return fromLocalJson(prompt, base, headers)
+  if (kind !== 'a1111' && kind !== 'automatic1111' && kind !== 'sdwebui') throw new Error(`unknown LOCAL_IMAGE_KIND ${kind}`)
+  const res = await postJson(joinPath(base, '/sdapi/v1/txt2img'), headers, { prompt, steps: 4, width: 512, height: 512, cfg_scale: 1 }, 120_000)
+  const buf = await readLimited(res)
+  if (!res.ok) throw new Error(errorDetail(res.status, buf.toString('utf8').slice(0, 400)))
+  let b64 = ''
+  try { b64 = JSON.parse(buf.toString('utf8'))?.images?.[0] || '' } catch { /* not json */ }
+  if (!b64) throw new Error('a1111 response had no images[0]')
+  const raw = b64.includes(',') ? b64.split(',').pop()! : b64
+  return { png: Buffer.from(raw, 'base64'), model: 'a1111' }
+}
+
+async function fromLocalJson(prompt: string, base: string, headers: Record<string, string>): Promise<{ png: Buffer; model: string }> {
+  const res = await postJson(base, headers, { prompt, width: 768, height: 768 })
+  if (!res.ok) throw new Error('Local image worker offline')
+  const ct = res.headers.get('content-type') || ''
+  const raw = ct.includes('json')
+    ? Buffer.from((JSON.parse((await readLimited(res)).toString('utf8'))?.image || ''), 'base64')
+    : await readLimited(res)
+  return { png: raw, model: 'local-json' }
+}
+
+async function fromLocalOpenAI(prompt: string, base: string, headers: Record<string, string>): Promise<{ png: Buffer; model: string }> {
+  const res = await postJson(joinPath(base, '/v1/images/generations'), headers, { prompt, size: '512x512', n: 1, response_format: 'b64_json' }, 120_000)
+  const buf = await readLimited(res)
+  if (!res.ok) throw new Error(errorDetail(res.status, buf.toString('utf8').slice(0, 400)))
+  const data = JSON.parse(buf.toString('utf8'))?.data?.[0]
+  if (data?.b64_json) return { png: Buffer.from(data.b64_json, 'base64'), model: 'local-openai' }
+  if (typeof data?.url === 'string') {
+    assertNotPaidHost(data.url)
+    const img = await imageFetch(data.url, { signal: AbortSignal.timeout(timeoutMs()) })
+    const raw = await readLimited(img)
+    if (!img.ok || !isImage(raw, img.headers.get('content-type') || '')) throw new Error('local openai-compatible response had no image')
+    return { png: raw, model: 'local-openai' }
+  }
+  throw new Error('local openai-compatible response had no image')
+}
+
+function comfyWorkflow(prompt: string, ckpt: string) {
+  return {
+    '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
+    '5': { class_type: 'EmptyLatentImage', inputs: { width: 512, height: 512, batch_size: 1 } },
+    '6': { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['4', 1] } },
+    '7': { class_type: 'CLIPTextEncode', inputs: { text: '', clip: ['4', 1] } },
+    '3': {
+      class_type: 'KSampler',
+      inputs: {
+        seed: Math.floor(Math.random() * 1e9), steps: 4, cfg: 1, sampler_name: 'euler', scheduler: 'normal', denoise: 1,
+        model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0]
+      }
+    },
+    '8': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
+    '9': { class_type: 'SaveImage', inputs: { filename_prefix: 'fraymus', images: ['8', 0] } }
   }
 }
 
-function escapeXml(s: string) {
-  return s.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c] as string))
+async function fromComfy(prompt: string, base: string, headers: Record<string, string>): Promise<{ png: Buffer; model: string }> {
+  const ckpt = process.env.COMFY_CHECKPOINT?.trim() || 'sd_xl_base_1.0.safetensors'
+  const res = await postJson(joinPath(base, '/prompt'), headers, { prompt: comfyWorkflow(prompt, ckpt) }, 30_000)
+  const createdBuf = await readLimited(res)
+  if (!res.ok) throw new Error(errorDetail(res.status, createdBuf.toString('utf8').slice(0, 400)))
+  const created = JSON.parse(createdBuf.toString('utf8'))
+  if (!created.prompt_id) throw new Error(clip('comfy did not return prompt_id'))
+  let image: { filename: string; subfolder?: string; type?: string } | undefined
+  for (let i = 0; i < 60 && !image; i++) {
+    if (i) await sleep(1000)
+    const histRes = await imageFetch(`${base.replace(/\/$/, '')}/history/${created.prompt_id}`, { headers, signal: AbortSignal.timeout(20_000) })
+    const histBuf = await readLimited(histRes)
+    if (!histRes.ok) throw new Error(errorDetail(histRes.status, histBuf.toString('utf8').slice(0, 300)))
+    const hist = JSON.parse(histBuf.toString('utf8'))
+    const outputs = hist?.[created.prompt_id]?.outputs || {}
+    for (const node of Object.values(outputs) as any[]) {
+      if (node?.images?.[0]?.filename) { image = node.images[0]; break }
+    }
+  }
+  if (!image) throw new Error('comfy history had no image')
+  const q = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder || '', type: image.type || 'output' })
+  const view = await imageFetch(`${base.replace(/\/$/, '')}/view?${q}`, { signal: AbortSignal.timeout(timeoutMs()) })
+  const raw = await readLimited(view)
+  if (!view.ok || !isImage(raw, view.headers.get('content-type') || '')) throw new Error('comfy view was not an image')
+  return { png: raw, model: ckpt }
+}
+
+async function fromOpenAI(prompt: string): Promise<{ png: Buffer; model: string }> {
+  const model = process.env.OPENAI_IMAGE_MODEL?.trim() || 'gpt-image-1'
+  const base = (process.env.OPENAI_IMAGE_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
+  const body: Record<string, unknown> = { model, prompt, size: '1024x1024', n: 1 }
+  if (model.startsWith('dall-e')) body.response_format = 'b64_json'
+  const res = await postJson(`${base}/images/generations`, {
+    Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    'Content-Type': 'application/json'
+  }, body, 120_000)
+  const buf = await readLimited(res)
+  if (!res.ok) throw new Error(errorDetail(res.status, buf.toString('utf8').slice(0, 500)))
+  const data = JSON.parse(buf.toString('utf8'))?.data?.[0]
+  if (data?.b64_json) return { png: Buffer.from(data.b64_json, 'base64'), model }
+  if (typeof data?.url === 'string') {
+    const img = await imageFetch(data.url, { signal: AbortSignal.timeout(timeoutMs()) })
+    const raw = await readLimited(img)
+    if (!img.ok || !isImage(raw, img.headers.get('content-type') || '')) throw new Error('openai response had no image')
+    return { png: raw, model }
+  }
+  throw new Error('openai response had no image')
+}
+
+async function fromReplicate(prompt: string): Promise<{ png: Buffer; model: string }> {
+  const model = process.env.REPLICATE_IMAGE_MODEL?.trim() || 'black-forest-labs/flux-schnell'
+  const token = process.env.REPLICATE_API_TOKEN || ''
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Prefer: 'wait=60' }
+  const res = await postJson(`https://api.replicate.com/v1/models/${model}/predictions`, headers, { input: { prompt } })
+  let pred: any = JSON.parse((await readLimited(res)).toString('utf8'))
+  if (!res.ok) throw new Error(errorDetail(res.status, JSON.stringify(pred).slice(0, 400)))
+  for (let i = 0; i < 30 && pred?.urls?.get && !['succeeded', 'failed', 'canceled'].includes(pred.status); i++) {
+    await sleep(1000)
+    const poll = await imageFetch(pred.urls.get, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
+    const text = (await readLimited(poll)).toString('utf8')
+    pred = JSON.parse(text)
+    if (!poll.ok) throw new Error(errorDetail(poll.status, text.slice(0, 300)))
+  }
+  if (pred.status !== 'succeeded') throw new Error(clip(`replicate ${pred.status || 'error'}: ${pred.error || pred.detail || ''}`))
+  const out = Array.isArray(pred.output) ? pred.output[0] : pred.output
+  if (typeof out !== 'string') throw new Error('replicate returned no image')
+  const img = await imageFetch(out, { signal: AbortSignal.timeout(timeoutMs()) })
+  const raw = await readLimited(img)
+  if (!img.ok || !isImage(raw, img.headers.get('content-type') || '')) throw new Error('replicate output was not an image')
+  return { png: raw, model }
+}
+
+function done(engine: string, model: string, costMode: CostMode, png: Buffer, attempts: ImageAttempt[], watermark = false, width?: number, height?: number): ImageResult {
+  return { png, mocked: false, engine, model, costMode, width, height, watermark, attempts }
+}
+
+async function callProvider(name: string, prompt: string, attempts: ImageAttempt[]): Promise<ImageResult | null> {
+  if (name === 'pollinations') return pollinations(prompt, attempts)
+  const t0 = Date.now()
+  try {
+    let out: { png: Buffer; model: string }
+    let cost: CostMode = 'free'
+    let engine = name
+    if (name === 'huggingface') { out = await fromHuggingFace(prompt); engine = 'huggingface' }
+    else if (name === 'gemini') { out = await fromGemini(prompt); cost = 'paid'; engine = 'gemini' }
+    else if (name === 'local') { out = await fromLocal(prompt); engine = 'local' }
+    else if (name === 'openai') { out = await fromOpenAI(prompt); cost = 'paid'; engine = 'openai' }
+    else if (name === 'replicate') { out = await fromReplicate(prompt); cost = 'paid'; engine = 'replicate' }
+    else throw new Error('unknown provider')
+    const norm = await normalizePng(out.png)
+    attempts.push({ provider: name, status: 'succeeded', durationMs: Date.now() - t0 })
+    return done(engine, out.model, cost, norm.png, attempts, false, norm.width, norm.height)
+  } catch (e: any) {
+    const reason = clip(e?.message || String(e))
+    console.warn(`[image] ${name} failed: ${reason}`)
+    attempts.push({ provider: name, status: reason, durationMs: Date.now() - t0 })
+    return null
+  }
 }
 
 async function placeholder(prompt: string, attempts: ImageAttempt[]): Promise<ImageResult> {
@@ -427,38 +471,42 @@ async function placeholder(prompt: string, attempts: ImageAttempt[]): Promise<Im
   }
 }
 
-function closedMessage(attempts: ImageAttempt[]) {
-  const why = attempts.map((a) => `${a.provider}: ${a.status}`).join(' | ').slice(0, 300)
-  return `Paid run stopped: no real image was produced (${why || 'no provider'}). Not using a placeholder or a paid API. This run should be refunded.`
+export function failureMessage(attempts: ImageAttempt[], strict = false): string {
+  const why = attempts.filter((a) => a.provider !== 'placeholder').map((a) => `${a.provider} (${a.status})`).join('; ')
+  const base = `Image generation failed. Tried ${why || 'no provider'}.`
+  return strict ? `${base} This run should be refunded.` : base
 }
 
 export function resetImageGenForTests() {
   pollCache.clear()
-  pollLastStarted = 0
   pollTail = Promise.resolve()
   fetchOverride = null
-  const path = budgetPath || `${process.env.DATA_DIR || './data'}/image-budget.sqlite`
-  if (budget) { try { budget.close() } catch { /* already closed */ } budget = null }
-  budgetPath = ''
-  budgetOpen = null
-  try { rmSync(path, { force: true }) } catch { /* no budget file yet */ }
 }
 
 export async function runFlux(prompt: string, opts: { strict?: boolean } = {}): Promise<ImageResult> {
   const strict = !!opts.strict
-  const plan = imageProviderPlan({ strict })
+  const text = String(prompt || '').trim()
+  if (!text) throw new Error('prompt required')
+  const names = listedImageProviders({ strict })
   const attempts: ImageAttempt[] = []
-  if (!plan.length) throw new Error(closedMessage(attempts))
-  for (const name of plan) {
-    let result: ImageResult | null = null
-    if (name === 'hf-fal') result = await tryHf(prompt, attempts)
-    else if (name === 'pollinations') result = await pollinations(prompt, attempts)
-    else if (name === 'gemini') result = await tryGemini(prompt, attempts)
-    else if (name === 'local') result = await tryLocal(prompt, attempts)
-    else if (name === 'placeholder') result = await placeholder(prompt, attempts)
-    else attempts.push({ provider: name, status: 'unknown', durationMs: 0 })
+  let called = false
+  for (const name of names) {
+    if (!KNOWN.has(name)) {
+      attempts.push({ provider: name, status: 'unknown provider', durationMs: 0 })
+      continue
+    }
+    if (name === 'placeholder') {
+      if (!strict) return placeholder(text, attempts)
+      continue
+    }
+    if (!configured(name)) {
+      attempts.push({ provider: name, status: skipReason(name), durationMs: 0 })
+      continue
+    }
+    called = true
+    const result = await callProvider(name, text, attempts)
     if (result) return result
   }
-  if (strict || !plan.includes('placeholder')) throw new Error(closedMessage(attempts))
-  return placeholder(prompt, attempts)
+  if (!called && !strict) return placeholder(text, attempts)
+  throw new Error(failureMessage(attempts, strict))
 }

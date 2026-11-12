@@ -1,5 +1,6 @@
 // Semantic store in SQLite (DATA_DIR/agent.db): FTS5 keyword search always, plus vector search when an
 // OpenAI-compatible /embeddings endpoint answers (EMBED_BASE_URL / EMBED_API_KEY / EMBED_MODEL; EMBED_BACKEND=off disables).
+// OPENAI_BASE_URL / OPENAI_API_KEY are not used unless EMBED_ALLOW_OPENAI=1, so a chat key does not embed on its own.
 // Scopes: 'agent' entries are seen only by that agent; 'shared' entries are seen by every agent of the same user.
 import { db, now } from '../agent/db'
 import { NGRAM_SCAN_LIMIT, ngramRankEnabled, rankNgrams } from './ngram'
@@ -19,12 +20,15 @@ const MAX_DOC = 2000
 const STOP = new Set('the and for are but not you your with this that have has had was were what when where which who why how can could would should will just from into about they them then than there their our out all any its it\'s also been being does did doing done get got like make made more most much some such very what\'s tell know remember'.split(' '))
 
 // ---- embeddings (optional, degrades to FTS only)
-const embedCfg = () => ({
-  backend: (process.env.EMBED_BACKEND || 'auto').toLowerCase(),
-  base: (process.env.EMBED_BASE_URL || process.env.OPENAI_BASE_URL || '').replace(/\/$/, ''),
-  key: process.env.EMBED_API_KEY || process.env.OPENAI_API_KEY || '',
-  model: process.env.EMBED_MODEL || 'text-embedding-3-small'
-})
+const embedCfg = () => {
+  const allowOpenAI = ['1', 'true', 'on'].includes((process.env.EMBED_ALLOW_OPENAI || '').trim().toLowerCase())
+  return {
+    backend: (process.env.EMBED_BACKEND || 'auto').toLowerCase(),
+    base: (process.env.EMBED_BASE_URL || (allowOpenAI ? process.env.OPENAI_BASE_URL : '') || '').replace(/\/$/, ''),
+    key: process.env.EMBED_API_KEY || (allowOpenAI ? process.env.OPENAI_API_KEY : '') || '',
+    model: process.env.EMBED_MODEL || 'text-embedding-3-small'
+  }
+}
 let embedDownUntil = 0
 let embedLastError = ''
 let embedOk = false

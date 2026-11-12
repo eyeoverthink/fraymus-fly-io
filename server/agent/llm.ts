@@ -59,8 +59,10 @@ async function callOpenAI(name: string, base: string, key: string, messages: Msg
         ? { role: 'assistant', content: m.content || null, tool_calls: m.tool_calls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) } })) }
         : m.role === 'tool' ? { role: 'tool', tool_call_id: m.tool_call_id, content: m.content } : { role: m.role, content: m.content })
   }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }
+  if (name === 'openai' && process.env.OPENAI_USER_AGENT) headers['User-Agent'] = process.env.OPENAI_USER_AGENT
   const r = await fetch(`${base.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key, ...(process.env.OPENAI_USER_AGENT ? { 'User-Agent': process.env.OPENAI_USER_AGENT } : {}) }, body: JSON.stringify(body), signal: AbortSignal.timeout(120000)
+    method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(120000)
   })
   if (!r.ok) throw new Error(`${name} ${r.status}: ${(await r.text()).slice(0, 200)}`)
   const j: any = await r.json()
@@ -70,22 +72,48 @@ async function callOpenAI(name: string, base: string, key: string, messages: Msg
   return { content: m.content || '', tool_calls: calls, provider: name, model }
 }
 
+function hostIsXai(url: string) {
+  try { return /(^|\.)x\.ai$/i.test(new URL(url).hostname) } catch { return false }
+}
+// xAI key: XAI_API_KEY, else the prompt-step key when that step already points at api.x.ai (Fly).
+function xaiKey() {
+  if (process.env.XAI_API_KEY?.trim()) return process.env.XAI_API_KEY
+  if (process.env.PROMPT_LLM_API_KEY?.trim() && hostIsXai(process.env.PROMPT_LLM_BASE_URL || '')) return process.env.PROMPT_LLM_API_KEY
+  return ''
+}
+function xaiBase() {
+  const prompt = (process.env.PROMPT_LLM_BASE_URL || '').replace(/\/$/, '')
+  if (hostIsXai(prompt)) return prompt
+  const explicit = (process.env.XAI_BASE_URL || '').replace(/\/$/, '')
+  if (explicit && hostIsXai(explicit)) return explicit
+  return 'https://api.x.ai/v1'
+}
+function xaiModel() {
+  return process.env.XAI_MODEL || process.env.PROMPT_LLM_MODEL || 'grok-4.20-0309-non-reasoning'
+}
+
 type Provider = { name: string; configured: () => boolean | Promise<boolean>; call: (m: Msg[], t: ToolSpec[], model?: string) => Promise<LlmResult> }
 
 const providers: Provider[] = [
   { name: 'ollama', configured: async () => (await ollamaModels()).length > 0, call: callOllama },
   {
+    name: 'xai', configured: () => !!xaiKey(),
+    call: (m, t, model) => callOpenAI('xai', xaiBase(), xaiKey(), m, t, model || xaiModel())
+  },
+  {
     name: 'groq', configured: () => !!process.env.GROQ_API_KEY,
     call: (m, t, model) => callOpenAI('groq', 'https://api.groq.com/openai/v1', process.env.GROQ_API_KEY!, m, t, model || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile')
   },
   {
+    // Opt-in: reached only when LLM_PROVIDERS lists openai. A set OPENAI_API_KEY is not enough.
     name: 'openai', configured: () => !!(process.env.OPENAI_BASE_URL && process.env.OPENAI_API_KEY),
     call: (m, t, model) => callOpenAI('openai', process.env.OPENAI_BASE_URL!, process.env.OPENAI_API_KEY!, m, t, model || process.env.OPENAI_MODEL || 'gpt-4o-mini')
   }
 ]
 
-// Order is LLM_PROVIDERS (default: ollama,groq,openai): self-hosted first, hosted as fallback
-const order = () => (process.env.LLM_PROVIDERS || 'ollama,groq,openai').split(',').map((s) => s.trim()).filter(Boolean)
+// Order is LLM_PROVIDERS. Default is xAI, then Groq when GROQ_API_KEY is set.
+// Ollama and OpenAI run only when named here. OpenAI is never implied by a leftover key.
+const order = () => (process.env.LLM_PROVIDERS || 'xai,groq').split(',').map((s) => s.trim()).filter(Boolean)
 
 export async function providerStatus() {
   const out: any[] = []
@@ -135,7 +163,7 @@ function mockChat(messages: Msg[], tools: ToolSpec[]): LlmResult {
   if (has('generate_image') && (m = text.match(/(?:image|picture|draw|generate) (?:of )?(.+)/i))) return mk('generate_image', { prompt: m[1] })
   if (has('web_search') && (m = text.match(/search (?:for )?(.+)/i))) return mk('web_search', { query: m[1] })
   return {
-    content: `[mock model - no LLM configured] You said: "${text.slice(0, 200)}". Start Ollama or set GROQ_API_KEY / OPENAI_BASE_URL to get real answers.`,
+    content: `[mock model - no LLM configured] You said: "${text.slice(0, 200)}". Set PROMPT_LLM_API_KEY with PROMPT_LLM_BASE_URL=https://api.x.ai/v1, or GROQ_API_KEY, to get real answers.`,
     tool_calls: [], provider: 'mock', model: 'mock'
   }
 }

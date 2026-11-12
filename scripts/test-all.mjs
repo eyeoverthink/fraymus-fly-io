@@ -8,7 +8,7 @@ const port = String(3100 + Math.floor(Math.random() * 500))
 const base = `http://localhost:${port}`
 const dataDir = mkdtempSync(join(tmpdir(), 'nodular-test-'))
 const win = process.platform === 'win32'
-const env = { ...process.env, PORT: port, DATA_DIR: dataDir, LLM_PROVIDERS: 'none', FREE_CREDITS: '5', BASE: base, BASE_URL: base, WORKSPACE_AUTH: 'off', WORKSPACE_ACCESS_TOKEN: '', CLERK_SECRET_KEY: '', ORGANISM_TELEMETRY: '', MEMORY_NGRAM: '', HF_TOKEN: '', IMAGE_PROVIDERS: 'placeholder', ENABLE_PAID_REPLICATE: '', HF_FLUX_URL: '' }
+const env = { ...process.env, PORT: port, DATA_DIR: dataDir, LLM_PROVIDERS: 'none', FREE_CREDITS: '5', BASE: base, BASE_URL: base, WORKSPACE_AUTH: 'off', WORKSPACE_ACCESS_TOKEN: '', CLERK_SECRET_KEY: '', ORGANISM_TELEMETRY: '', MEMORY_NGRAM: '', HF_TOKEN: '', IMAGE_PROVIDERS: 'placeholder', BUYER_IMAGE_PROVIDERS: 'placeholder', FREE_STUDIO_URL: '', FREE_STUDIO_PASS: '', FREE_STUDIO_MEDIA_KEY: '', ENABLE_PAID_REPLICATE: '', HF_FLUX_URL: '' }
 const server = spawn(win ? 'npx.cmd' : 'npx', ['tsx', 'server/index.ts'], { env, stdio: 'ignore', shell: win })
 const stop = () => { if (win) spawn('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' }); else server.kill() }
 

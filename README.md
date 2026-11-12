@@ -49,7 +49,7 @@ All settings are environment variables; [.env.example](.env.example) lists every
 | Auth | `CLERK_SECRET_KEY`, `VITE_CLERK_PUBLISHABLE_KEY`, `WORKSPACE_ACCESS_TOKEN`, `WORKSPACE_AUTH`, `OWNER_USER_IDS`, `MCP_ADMIN_TOKEN` |
 | LLMs | `LLM_PROVIDERS` (default `xai,groq`), `PROMPT_LLM*` / `XAI_*` for xAI, `GROQ_*` only with a key, `OPENAI_*` only when `openai` is listed, `EMBED_*` |
 | Organism stage 1 | `ORGANISM_TELEMETRY`, `MEMORY_NGRAM` (both default off; `on` / `1` / `true` to opt in) |
-| Images | `HF_TOKEN`, `IMAGE_PROVIDERS` (default `huggingface,gemini,pollinations,local`), `BUYER_IMAGE_PROVIDERS=huggingface`. OpenAI and Replicate images run only when that name is listed and its key is set. |
+| Images | `HF_SPACE_FLUX`, `FREE_STUDIO_URL`, `FREE_STUDIO_PASS`, `FREE_STUDIO_MEDIA_KEY`, `IMAGE_PROVIDERS` (default `hfspace,freestudio,pollinations`). `HF_TOKEN` is optional and is not billed. |
 | Shopify / buyers | `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_PACK_PRODUCT_ID`, `SHOPIFY_CREDITS_PER_PACK`, `RESEND_API_KEY`, `MAIL_FROM`, `BUYER_PIPELINE_STRICT`, `FREE_CREDITS` |
 | Billing | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_METER_EVENT_NAME` |
 | Story Shorts | `PIPER_BIN`, `PIPER_MODEL`, `PIPER_LENGTH_SCALE`, `PIPER_SENTENCE_SILENCE`, `ESPEAK_*`, `FFMPEG_BIN`, `FFPROBE_BIN`, `SHORTS_MAX_CONCURRENT`, `SHORTS_FFMPEG_THREADS` |
@@ -60,7 +60,7 @@ Optional Supabase store instead of SQLite: `SUPABASE_URL` + `SUPABASE_SERVICE_KE
 
 ### Images
 
-Every canvas, pipeline, buyer, and agent image goes through `runFlux()`. The preview chain is Hugging Face inference (`HF_TOKEN`: FLUX.1-schnell, then SDXL), then Gemini only when `GEMINI_API_KEY` is set (Google lists no free tier for `gemini-2.5-flash-image`), then anonymous Pollinations, then a local server when `LOCAL_IMAGE_URL` is set. If every provider that ran fails, the error names each one and why. Nothing configured returns a labelled offline placeholder. Pollinations adds a watermark, runs one request at a time, and can cache the prompt publicly, so do not send confidential text. Buyer runs use only Hugging Face and refund when it cannot produce an image. OpenAI Images and Replicate are not called unless `IMAGE_PROVIDERS` lists that name and the matching key is set. Replicate upscale also needs `ENABLE_PAID_REPLICATE=1`. Sharp output is a resize, not AI upscaling. The background remover is local (`@imgly/background-removal`) and does not call a paid API.
+Every canvas, pipeline, buyer, and agent image goes through `runFlux()`. The free chain is the public `black-forest-labs/FLUX.1-schnell` Space (ZeroGPU time, no per-image bill; `HF_SPACE_FLUX` can point at another Space), then Free Studio when `FREE_STUDIO_URL`, `FREE_STUDIO_PASS`, and `FREE_STUDIO_MEDIA_KEY` are set, then anonymous Pollinations. `HF_TOKEN`, if set, is sent only as a bearer header so the Space uses that account's free ZeroGPU quota. It is not sent to a billed router. A buyer run uses the same free chain and keeps the image when any of them succeeds. It refunds only when every provider that ran fails. The error names each one. Pollinations adds a watermark. The Space and Free Studio do not. OpenAI, Replicate, and Gemini are not called unless `IMAGE_PROVIDERS` lists that name and its key is set. Replicate upscale also needs `ENABLE_PAID_REPLICATE=1`. Sharp output is a resize, not AI upscaling. The background remover is local (`@imgly/background-removal`).
 
 ## Health and tests
 

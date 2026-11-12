@@ -64,7 +64,8 @@ If a Clerk user later signs in with the same verified email, the buyer balance m
     # Chat uses the existing PROMPT_LLM_API_KEY against https://api.x.ai/v1 (LLM_PROVIDERS=xai,groq).
     # optional: GROQ_API_KEY. OpenAI chat/images only if LLM_PROVIDERS or IMAGE_PROVIDERS names openai.
     #           REPLICATE_API_TOKEN does nothing unless IMAGE_PROVIDERS lists replicate and
-    #           ENABLE_PAID_REPLICATE=1. Images: HF FLUX then SDXL, optional Gemini, Pollinations, local.
+    #           ENABLE_PAID_REPLICATE=1. Images: public FLUX Space, optional Free Studio, then Pollinations.
+    #           Free Studio needs FREE_STUDIO_URL, FREE_STUDIO_PASS, and FREE_STUDIO_MEDIA_KEY.
     #           Buyer runs stay on BUYER_IMAGE_PROVIDERS=huggingface and refund when that route cannot answer.
     #           CLERK_SECRET_KEY / VITE_CLERK_PUBLISHABLE_KEY (locks the workspace UI to signed-in users), MCP_ADMIN_TOKEN
     fly deploy

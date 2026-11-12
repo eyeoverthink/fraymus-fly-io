@@ -18,9 +18,10 @@ primary_region = 'ams'
 
 [env]
   BUYER_PIPELINE_STRICT = '1'
-  BUYER_IMAGE_PROVIDERS = 'huggingface'
+  BUYER_IMAGE_PROVIDERS = 'hfspace,freestudio,pollinations'
   ENABLE_PAID_REPLICATE = '0'
-  IMAGE_PROVIDERS = 'huggingface,gemini,pollinations,local'
+  HF_SPACE_FLUX = 'black-forest-labs/FLUX.1-schnell'
+  IMAGE_PROVIDERS = 'hfspace,freestudio,pollinations'
   DATA_DIR = '/data'
   FREE_CREDITS = '0'
   LLM_PROVIDERS = 'xai,groq'

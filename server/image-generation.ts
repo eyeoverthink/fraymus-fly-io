@@ -1,12 +1,12 @@
 // Free-first image generation. runFlux is the only image entry point
 // (canvas, /api/flux, buyer pipeline, generate_image).
 //
-// Default order: Hugging Face inference (FLUX.1-schnell, then SDXL) -> Gemini
-// (only when GEMINI_API_KEY is set; Google lists no free tier for that image model)
-// -> Pollinations (no key) -> a local server (LOCAL_IMAGE_URL).
-// OpenAI Images and Replicate are called only when that name is listed in
-// IMAGE_PROVIDERS and its key is set. A key alone does nothing.
+// Default order, free only: public FLUX.1-schnell Space (ZeroGPU, no credits)
+// -> Free Studio when FREE_STUDIO_* is set -> Pollinations.
+// OpenAI, Replicate, and Gemini run only when IMAGE_PROVIDERS lists them and a key is set.
 // If every provider that actually ran fails, the error names each one and why.
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import sharp from 'sharp'
 
 export type CostMode = 'free' | 'paid' | 'included-credit' | 'offline'
@@ -23,10 +23,10 @@ export type ImageResult = {
   attempts: ImageAttempt[]
 }
 
-export const DEFAULT_IMAGE_PROVIDERS = ['huggingface', 'gemini', 'pollinations', 'local'] as const
-export const PAID_IMAGE_PROVIDERS = ['openai', 'replicate'] as const
-const KNOWN = new Set<string>([...DEFAULT_IMAGE_PROVIDERS, ...PAID_IMAGE_PROVIDERS, 'placeholder'])
-const SECRET_ENV = ['HF_TOKEN', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'REPLICATE_API_TOKEN', 'LOCAL_IMAGE_TOKEN', 'PROMPT_LLM_API_KEY', 'XAI_API_KEY'] as const
+export const DEFAULT_IMAGE_PROVIDERS = ['hfspace', 'freestudio', 'pollinations'] as const
+export const PAID_IMAGE_PROVIDERS = ['openai', 'replicate', 'gemini'] as const
+const KNOWN = new Set<string>([...DEFAULT_IMAGE_PROVIDERS, ...PAID_IMAGE_PROVIDERS, 'local', 'placeholder'])
+const SECRET_ENV = ['HF_TOKEN', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'REPLICATE_API_TOKEN', 'LOCAL_IMAGE_TOKEN', 'PROMPT_LLM_API_KEY', 'XAI_API_KEY', 'FREE_STUDIO_URL', 'FREE_STUDIO_PASS', 'FREE_STUDIO_MEDIA_KEY', 'FREE_STUDIO_USER'] as const
 
 let fetchOverride: typeof fetch | null = null
 const pollCache = new Map<string, Buffer>()
@@ -66,17 +66,17 @@ function clip(s: string, max = 180) {
   return redactSecrets(s).replace(/\s+/g, ' ').trim().slice(0, max)
 }
 
-/** Names from IMAGE_PROVIDERS (or the buyer list when strict). `hf-fal` is the free HF inference alias, not fal-ai. */
+/** Names from IMAGE_PROVIDERS (or the buyer list when strict). Old paid HF names map to the free Space. */
 export function listedImageProviders(opts: { strict?: boolean } = {}): string[] {
   const raw = opts.strict
-    ? (process.env.BUYER_IMAGE_PROVIDERS ?? 'huggingface')
+    ? (process.env.BUYER_IMAGE_PROVIDERS ?? DEFAULT_IMAGE_PROVIDERS.join(','))
     : process.env.IMAGE_PROVIDERS
   const source = raw === undefined ? DEFAULT_IMAGE_PROVIDERS.join(',') : raw
   const names = source.split(',').map((s) => s.trim().toLowerCase()).filter((n) => n && n !== 'none')
   if (!names.length || names.every((n) => n === 'none')) return []
   const out: string[] = []
   for (const name of names) {
-    const mapped = name === 'hf-fal' ? 'huggingface' : name
+    const mapped = name === 'hf-fal' || name === 'huggingface' ? 'hfspace' : name
     if (opts.strict && mapped === 'placeholder') continue
     if (!out.includes(mapped)) out.push(mapped)
   }
@@ -85,7 +85,8 @@ export function listedImageProviders(opts: { strict?: boolean } = {}): string[] 
 
 function configured(name: string): boolean {
   switch (name) {
-    case 'huggingface': return !!process.env.HF_TOKEN?.trim()
+    case 'hfspace': return true
+    case 'freestudio': return !!(process.env.FREE_STUDIO_URL?.trim() && process.env.FREE_STUDIO_PASS?.trim() && process.env.FREE_STUDIO_MEDIA_KEY?.trim())
     case 'gemini': return !!process.env.GEMINI_API_KEY?.trim()
     case 'pollinations': return true
     case 'local': return !!(process.env.LOCAL_IMAGE_URL || process.env.LOCAL_IMAGE_ENDPOINT || '').trim()
@@ -98,7 +99,7 @@ function configured(name: string): boolean {
 
 function skipReason(name: string): string {
   switch (name) {
-    case 'huggingface': return 'HF_TOKEN not set'
+    case 'freestudio': return 'FREE_STUDIO_URL, FREE_STUDIO_PASS, or FREE_STUDIO_MEDIA_KEY not set'
     case 'gemini': return 'GEMINI_API_KEY not set'
     case 'local': return 'LOCAL_IMAGE_URL not set'
     case 'openai': return 'OPENAI_API_KEY not set'
@@ -171,31 +172,178 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function hfModels(): string[] {
-  if (process.env.HF_IMAGE_MODEL?.trim()) return [process.env.HF_IMAGE_MODEL.trim()]
-  return (process.env.HF_IMAGE_MODELS || 'black-forest-labs/FLUX.1-schnell,stabilityai/stable-diffusion-xl-base-1.0')
-    .split(',').map((s) => s.trim()).filter(Boolean)
+function isPrivateIp(ip: string): boolean {
+  if (ip.startsWith('::ffff:')) return isPrivateIp(ip.slice(7))
+  if (isIP(ip) === 6) return ip === '::1' || ip === '::' || /^f[cd]/i.test(ip) || /^fe[89ab]/i.test(ip)
+  const [a, b] = ip.split('.').map(Number)
+  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
 }
 
-async function fromHuggingFace(prompt: string): Promise<{ png: Buffer; model: string }> {
-  const errors: string[] = []
-  for (const model of hfModels()) {
-    const schnell = /schnell/i.test(model)
-    try {
-      const res = await postJson(`https://router.huggingface.co/hf-inference/models/${model}`, {
-        Authorization: `Bearer ${process.env.HF_TOKEN}`,
-        'Content-Type': 'application/json',
-        Accept: 'image/png'
-      }, { inputs: prompt, parameters: { num_inference_steps: schnell ? 4 : 20, guidance_scale: schnell ? 0 : 7.5 } })
-      const buf = await readLimited(res)
-      const ct = res.headers.get('content-type') || ''
-      if (res.ok && isImage(buf, ct)) return { png: buf, model }
-      errors.push(`${model} ${errorDetail(res.status, buf.toString('utf8').slice(0, 400))}`)
-    } catch (e: any) {
-      errors.push(`${model} ${clip(e?.message || String(e))}`)
-    }
+function blockedImageHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase()
+  if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h === 'metadata.google.internal') return true
+  return isIP(h) ? isPrivateIp(h) : false
+}
+
+async function assertPublicImageUrl(raw: string) {
+  let u: URL
+  try { u = new URL(raw) } catch { throw new Error('image url rejected') }
+  if (u.protocol !== 'https:') throw new Error('image url rejected')
+  if (blockedImageHost(u.hostname)) throw new Error('image url rejected')
+  if (fetchOverride) return
+  const host = u.hostname.replace(/^\[|\]$/g, '')
+  if (isIP(host)) return
+  const addrs = await lookup(host, { all: true })
+  if (addrs.some((a) => isPrivateIp(a.address))) throw new Error('image url rejected')
+}
+
+async function fetchPublicImage(raw: string, hops = 0): Promise<Response> {
+  await assertPublicImageUrl(raw)
+  const res = await imageFetch(raw, { signal: AbortSignal.timeout(timeoutMs()), redirect: 'manual' })
+  if (res.status >= 300 && res.status < 400) {
+    const loc = res.headers.get('location')
+    if (!loc || hops >= 3) throw new Error('image url rejected')
+    return fetchPublicImage(new URL(loc, raw).toString(), hops + 1)
   }
-  throw new Error(errors.join('; ') || 'no Hugging Face image model configured')
+  return res
+}
+
+async function readTextLimited(res: Response, max = 1_000_000): Promise<string> {
+  const declared = Number(res.headers.get('content-length') || 0)
+  if (declared > max) throw new Error('router response too large')
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > max) { await reader.cancel(); throw new Error('router response too large') }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+function spaceId() { return (process.env.HF_SPACE_FLUX || 'black-forest-labs/FLUX.1-schnell').trim() }
+function spaceTimeout() { return Math.max(5000, num(process.env.HF_SPACE_TIMEOUT_MS, 60_000)) }
+function spaceOrigin(id: string) {
+  const [owner, name] = id.split('/')
+  if (!owner || !name || id.split('/').length !== 2) throw new Error('HF_SPACE_FLUX must look like owner/name')
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return `https://${slug(owner)}-${slug(name)}.hf.space`
+}
+function findUrl(value: any): string {
+  if (!value) return ''
+  if (typeof value === 'string' && /^https?:\/\//.test(value)) return value
+  if (Array.isArray(value)) {
+    for (const item of value) { const found = findUrl(item); if (found) return found }
+    return ''
+  }
+  if (typeof value === 'object') {
+    if (typeof value.url === 'string' && value.url) return value.url
+    for (const item of Object.values(value)) { const found = findUrl(item); if (found) return found }
+  }
+  return ''
+}
+function gradioFileUrl(sse: string): string {
+  for (const block of sse.split(/\n\n+/)) {
+    const event = /(?:^|\n)event:\s*(\S+)/.exec(block)?.[1] || ''
+    const data = block.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n')
+    if (!data) continue
+    if (event === 'error') throw new Error(clip(data))
+    if (event && event !== 'complete') continue
+    try {
+      const url = findUrl(JSON.parse(data))
+      if (url) return url
+    } catch { /* not json */ }
+  }
+  return ''
+}
+
+// Public ZeroGPU Space. HF_TOKEN is optional and only raises the free daily quota.
+async function fromHfSpace(prompt: string): Promise<{ png: Buffer; model: string }> {
+  const id = spaceId()
+  const origin = spaceOrigin(id)
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = process.env.HF_TOKEN?.trim()
+  if (token) headers.Authorization = `Bearer ${token}`
+  const seed = Math.floor(Math.random() * 1_000_000_000)
+  const res = await postJson(`${origin}/gradio_api/call/infer`, headers, {
+    data: [prompt, seed, true, 512, 512, 4]
+  }, spaceTimeout())
+  const createdText = await readTextLimited(res)
+  if (!res.ok) throw new Error(errorDetail(res.status, createdText.slice(0, 400)))
+  let eventId = ''
+  try { eventId = JSON.parse(createdText)?.event_id || '' } catch { /* not json */ }
+  if (!eventId) throw new Error('gradio did not return event_id')
+  const sse = await imageFetch(`${origin}/gradio_api/call/infer/${encodeURIComponent(eventId)}`, {
+    headers: { ...headers, Accept: 'text/event-stream' },
+    signal: AbortSignal.timeout(spaceTimeout())
+  })
+  const sseText = await readTextLimited(sse, 2_000_000)
+  if (!sse.ok) throw new Error(errorDetail(sse.status, sseText.slice(0, 400)))
+  const found = gradioFileUrl(sseText)
+  if (!found) throw new Error('gradio returned no image')
+  const fileUrl = new URL(found, origin).toString()
+  const ir = await fetchPublicImage(fileUrl)
+  if (!ir.ok) throw new Error(`space image download ${ir.status}`)
+  return { png: await readLimited(ir), model: id }
+}
+
+function studioBase() { return (process.env.FREE_STUDIO_URL || '').trim().replace(/\/$/, '') }
+function studioHeaders(): Record<string, string> {
+  const user = (process.env.FREE_STUDIO_USER || 'castify').trim()
+  const pass = process.env.FREE_STUDIO_PASS || ''
+  const key = process.env.FREE_STUDIO_MEDIA_KEY || ''
+  return {
+    Authorization: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64'),
+    'X-Studio-Key': key,
+    'Content-Type': 'application/json',
+    Accept: 'application/json, image/png, image/jpeg, image/webp'
+  }
+}
+function studioFile(job: any): string {
+  const result = job?.result
+  return String(job?.file || job?.filename || job?.path || job?.output || job?.image || job?.url || result?.file || result?.url || result?.path || '')
+}
+
+// Z-Image Turbo on the owner's Mac, reached through the Hostinger proxy. Skipped when unset.
+async function fromFreeStudio(prompt: string): Promise<{ png: Buffer; model: string }> {
+  const base = studioBase()
+  await assertPublicImageUrl(base)
+  const headers = studioHeaders()
+  const res = await postJson(`${base}/media/image`, headers, { prompt, width: 512, height: 512 }, 60_000)
+  const createdText = await readTextLimited(res)
+  if (!res.ok) throw new Error(errorDetail(res.status, createdText.slice(0, 400)))
+  let created: any
+  try { created = JSON.parse(createdText) } catch { throw new Error('free studio returned invalid json') }
+  const id = created.id || created.jobId || created.job_id || created.job?.id
+  if (!id) throw new Error('free studio did not return a job id')
+  const deadline = Date.now() + 60_000
+  let file = ''
+  let status = ''
+  while (Date.now() < deadline) {
+    const jr = await imageFetch(`${base}/media/jobs/${encodeURIComponent(String(id))}`, { headers, signal: AbortSignal.timeout(20_000) })
+    const jt = await readTextLimited(jr)
+    if (!jr.ok) throw new Error(errorDetail(jr.status, jt.slice(0, 300)))
+    let job: any
+    try { job = JSON.parse(jt) } catch { throw new Error('free studio job was invalid json') }
+    status = String(job.status || job.state || '').toLowerCase()
+    if (/fail|error|cancel/.test(status)) throw new Error(clip(String(job.error || job.message || status || 'free studio job failed')))
+    file = studioFile(job)
+    if (file && (!status || /done|complete|succeed|ready|finish/.test(status))) break
+    file = ''
+    await sleep(750)
+  }
+  if (!file) throw new Error('free studio job timed out')
+  const fileUrl = /^https?:\/\//.test(file) ? file : new URL(file.startsWith('/') ? file : `/media/files/${file}`, base + '/').toString()
+  await assertPublicImageUrl(fileUrl)
+  const ir = await imageFetch(fileUrl, { headers, signal: AbortSignal.timeout(60_000), redirect: 'manual' })
+  if (ir.status >= 300 && ir.status < 400) throw new Error('free studio file redirect rejected')
+  if (!ir.ok) throw new Error(`free studio file ${ir.status}`)
+  return { png: await readLimited(ir), model: 'z-image-turbo' }
 }
 
 async function fromGemini(prompt: string): Promise<{ png: Buffer; model: string }> {
@@ -443,7 +591,8 @@ async function callProvider(name: string, prompt: string, attempts: ImageAttempt
     let out: { png: Buffer; model: string }
     let cost: CostMode = 'free'
     let engine = name
-    if (name === 'huggingface') { out = await fromHuggingFace(prompt); engine = 'huggingface' }
+    if (name === 'hfspace') { out = await fromHfSpace(prompt); engine = 'hf-space'; cost = 'free' }
+    else if (name === 'freestudio') { out = await fromFreeStudio(prompt); engine = 'free-studio'; cost = 'free' }
     else if (name === 'gemini') { out = await fromGemini(prompt); cost = 'paid'; engine = 'gemini' }
     else if (name === 'local') { out = await fromLocal(prompt); engine = 'local' }
     else if (name === 'openai') { out = await fromOpenAI(prompt); cost = 'paid'; engine = 'openai' }

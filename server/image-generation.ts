@@ -8,7 +8,9 @@
 // OpenAI Images and Replicate are called only when that name is listed in
 // IMAGE_PROVIDERS and its key is set. A key alone does nothing.
 // If every provider that actually ran fails, the error names each one and why.
+import { lookup } from 'node:dns/promises'
 import { mkdirSync, rmSync } from 'node:fs'
+import { isIP } from 'node:net'
 import { dirname } from 'node:path'
 import sharp from 'sharp'
 
@@ -50,9 +52,18 @@ function num(v: string | undefined, fallback: number) {
 function timeoutMs() { return Math.max(1000, num(process.env.IMAGE_GENERATION_TIMEOUT_MS, 90_000)) }
 function maxBytes() { return Math.max(1024, num(process.env.IMAGE_DOWNLOAD_MAX_BYTES, 25_000_000)) }
 function monthlyCap() { return Math.max(0, num(process.env.IMAGE_MONTHLY_CREDIT_CAP_USD, 1.5)) }
-function pricePerMp() { return Math.max(0, num(process.env.HF_IMAGE_PRICE_PER_MEGAPIXEL_USD, 0.003)) }
+function pricePerMp() {
+  const n = num(process.env.HF_IMAGE_PRICE_PER_MEGAPIXEL_USD, 0.003)
+  return n > 0 ? n : 0.003
+}
 function monthKey(d = new Date()) { return d.toISOString().slice(0, 7) }
-function estimateUsd(w: number, h: number) { return (w * h / 1_000_000) * pricePerMp() }
+// fal-ai list prices are higher than schnell for dev and fast SDXL. Undercounting those would walk past the cap.
+function modelUsdPerMp(model: string) {
+  if (/FLUX\.1-dev/i.test(model)) return Math.max(pricePerMp(), 0.025)
+  if (/stable-diffusion-xl/i.test(model)) return Math.max(pricePerMp(), 0.01)
+  return pricePerMp()
+}
+function estimateUsd(model: string, w: number, h: number) { return (w * h / 1_000_000) * modelUsdPerMp(model) }
 function overrunAllowed() {
   const v = (process.env.IMAGE_ALLOW_PAID_OVERRUN || '').trim().toLowerCase()
   return v === '1' || v === 'true' || v === 'on' || v === 'yes'
@@ -78,10 +89,11 @@ function exclusive<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 async function budgetDb() {
+  // Per machine. This Fly app is one machine with one volume, so the file is the whole cap.
   const path = `${process.env.DATA_DIR || './data'}/image-budget.sqlite`
   if (budget && budgetPath === path) return budget
   if (!budgetOpen) {
-    budgetOpen = (async () => {
+    const opening = (async () => {
       if (budget) { try { budget.close() } catch { /* already closed */ } budget = null }
       mkdirSync(dirname(path), { recursive: true })
       const { DatabaseSync } = await import('node:sqlite')
@@ -99,8 +111,14 @@ async function budgetDb() {
       )`)
       budgetPath = path
     })()
+    budgetOpen = opening.then(() => undefined, (err) => { budgetOpen = null; throw err })
   }
-  await budgetOpen
+  try {
+    await budgetOpen
+  } catch (err) {
+    budgetOpen = null
+    throw err
+  }
   budgetOpen = null
   return budget
 }
@@ -111,6 +129,8 @@ async function reserveHf(estimate: number): Promise<{ id: number } | { blocked: 
     const month = monthKey()
     db.exec('BEGIN IMMEDIATE')
     try {
+      const staleBefore = Date.now() - Math.max(timeoutMs() * 2, 180_000)
+      db.prepare(`update image_calls set status = 'failed', actual_usd = 0 where status = 'reserved' and created_at < ?`).run(staleBefore)
       const row = db.prepare(`select coalesce(sum(estimated_usd), 0) as spent from image_calls where month = ? and status in ('reserved', 'succeeded', 'quota-exhausted')`).get(month) as { spent: number }
       const spent = Number(row?.spent) || 0
       const quota = db.prepare(`select count(*) as n from image_calls where month = ? and status = 'quota-exhausted'`).get(month) as { n: number }
@@ -131,18 +151,30 @@ async function reserveHf(estimate: number): Promise<{ id: number } | { blocked: 
 
 async function finishHf(id: number, width: number, height: number) {
   const db = await budgetDb()
-  db.prepare(`update image_calls set status = 'succeeded', actual_usd = ?, width = ?, height = ? where id = ?`).run(estimateUsd(width, height), width, height, id)
+  db.prepare(`update image_calls set status = 'succeeded', actual_usd = estimated_usd, width = ?, height = ? where id = ?`).run(width, height, id)
 }
 
 async function releaseHf(id: number) {
   const db = await budgetDb()
-  db.prepare(`update image_calls set status = 'failed', actual_usd = 0 where id = ?`).run(id)
+  db.prepare(`update image_calls set status = 'failed', actual_usd = 0 where id = ? and status = 'reserved'`).run(id)
 }
 
-/** HF said the included credits are gone. Later calls skip fal-ai until next month. */
-async function exhaustHfQuota() {
+/** The router accepted the job, so the credit is spent even if the file never arrives. */
+async function keepBilled(id: number) {
   const db = await budgetDb()
-  db.prepare(`insert into image_calls (month, provider, status, estimated_usd, created_at) values (?, 'hf-fal', 'quota-exhausted', ?, ?)`).run(monthKey(), monthlyCap(), Date.now())
+  db.prepare(`update image_calls set status = 'succeeded', actual_usd = estimated_usd where id = ? and status = 'reserved'`).run(id)
+}
+
+async function reservationMonth(id: number) {
+  const db = await budgetDb()
+  const row = db.prepare(`select month from image_calls where id = ?`).get(id) as { month?: string } | undefined
+  return row?.month || monthKey()
+}
+
+/** HF said the included credits are gone. Later calls skip fal-ai until that reserved month ends. */
+async function exhaustHfQuota(month: string) {
+  const db = await budgetDb()
+  db.prepare(`insert into image_calls (month, provider, status, estimated_usd, created_at) values (?, 'hf-fal', 'quota-exhausted', ?, ?)`).run(month, monthlyCap(), Date.now())
 }
 
 export function redactSecrets(text: string, env: NodeJS.ProcessEnv = process.env): string {
@@ -269,8 +301,62 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+function isPrivateIp(ip: string): boolean {
+  if (ip.startsWith('::ffff:')) return isPrivateIp(ip.slice(7))
+  if (isIP(ip) === 6) return ip === '::1' || ip === '::' || /^f[cd]/i.test(ip) || /^fe[89ab]/i.test(ip)
+  const [a, b] = ip.split('.').map(Number)
+  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+}
+
+function blockedImageHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase()
+  if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h === 'metadata.google.internal') return true
+  return isIP(h) ? isPrivateIp(h) : false
+}
+
+async function assertPublicImageUrl(raw: string) {
+  let u: URL
+  try { u = new URL(raw) } catch { throw new Error('image url rejected') }
+  if (u.protocol !== 'https:') throw new Error('image url rejected')
+  if (blockedImageHost(u.hostname)) throw new Error('image url rejected')
+  if (fetchOverride) return
+  const host = u.hostname.replace(/^\[|\]$/g, '')
+  if (isIP(host)) return
+  const addrs = await lookup(host, { all: true })
+  if (addrs.some((a) => isPrivateIp(a.address))) throw new Error('image url rejected')
+}
+
+async function fetchPublicImage(raw: string, hops = 0): Promise<Response> {
+  await assertPublicImageUrl(raw)
+  const res = await imageFetch(raw, { signal: AbortSignal.timeout(timeoutMs()), redirect: 'manual' })
+  if (res.status >= 300 && res.status < 400) {
+    const loc = res.headers.get('location')
+    if (!loc || hops >= 3) throw new Error('image url rejected')
+    return fetchPublicImage(new URL(loc, raw).toString(), hops + 1)
+  }
+  return res
+}
+
+async function readTextLimited(res: Response, max = 1_000_000): Promise<string> {
+  const declared = Number(res.headers.get('content-length') || 0)
+  if (declared > max) throw new Error('router response too large')
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > max) { await reader.cancel(); throw new Error('router response too large') }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
 function hfModels(): string[] {
-  const one = process.env.HF_FLUX_MODEL?.trim() || process.env.HF_IMAGE_MODEL?.trim()
+  const one = process.env.HF_IMAGE_MODEL?.trim() || process.env.HF_FLUX_MODEL?.trim()
   if (one) return [one]
   return (process.env.HF_IMAGE_MODELS || 'black-forest-labs/FLUX.1-schnell')
     .split(',').map((s) => s.trim()).filter(Boolean)
@@ -286,9 +372,10 @@ async function fromHuggingFace(prompt: string): Promise<{ png: Buffer; model: st
   for (const model of hfModels()) {
     const id = FAL_IDS[model]
     if (!id) { errors.push(`${model} no fal-ai mapping`); continue }
-    const slot = await reserveHf(estimateUsd(HF_W, HF_H))
+    const slot = await reserveHf(estimateUsd(model, HF_W, HF_H))
     if ('blocked' in slot) throw new Error('cap-exceeded')
     reserved = true
+    let billed = false
     try {
       const schnell = /schnell/i.test(model)
       const res = await postJson(`https://router.huggingface.co/fal-ai/${id}`, {
@@ -299,26 +386,27 @@ async function fromHuggingFace(prompt: string): Promise<{ png: Buffer; model: st
         num_inference_steps: schnell ? 4 : 28,
         image_size: { width: HF_W, height: HF_H }
       })
-      const text = await res.text()
+      const text = await readTextLimited(res)
       if (!res.ok) {
-        if (res.status === 402) await exhaustHfQuota()
+        if (res.status === 402) await exhaustHfQuota(await reservationMonth(slot.id))
         const stop = res.status === 401 || res.status === 402 || res.status === 403
         errors.push(`${model} ${errorDetail(res.status, text.slice(0, 400))}`)
         await releaseHf(slot.id)
         if (stop) break
         continue
       }
+      billed = true
       let imgUrl = ''
       try { imgUrl = JSON.parse(text)?.images?.[0]?.url || '' } catch { /* not json */ }
       if (!imgUrl) {
         errors.push(`${model} invalid json`)
-        await releaseHf(slot.id)
+        await keepBilled(slot.id)
         continue
       }
-      const ir = await imageFetch(imgUrl, { signal: AbortSignal.timeout(timeoutMs()) })
+      const ir = await fetchPublicImage(imgUrl)
       if (!ir.ok) {
         errors.push(`${model} image download ${ir.status}`)
-        await releaseHf(slot.id)
+        await keepBilled(slot.id)
         continue
       }
       const norm = await normalizePng(await readLimited(ir))
@@ -326,7 +414,7 @@ async function fromHuggingFace(prompt: string): Promise<{ png: Buffer; model: st
       return { png: norm.png, model }
     } catch (e: any) {
       if (String(e?.message || e) === 'cap-exceeded') throw e
-      try { await releaseHf(slot.id) } catch { /* reservation already closed */ }
+      try { if (billed) await keepBilled(slot.id); else await releaseHf(slot.id) } catch { /* reservation already closed */ }
       errors.push(`${model} ${clip(e?.message || String(e))}`)
     }
   }
@@ -638,6 +726,10 @@ export async function runFlux(prompt: string, opts: { strict?: boolean } = {}): 
     }
     if (name === 'placeholder') {
       if (!strict) return placeholder(text, attempts)
+      continue
+    }
+    if (name === 'gemini' && attempts.some((a) => a.provider === 'huggingface' && /cap-exceeded|\b402\b/.test(a.status))) {
+      attempts.push({ provider: 'gemini', status: 'skipped after huggingface credit cap', durationMs: 0 })
       continue
     }
     if (!configured(name)) {

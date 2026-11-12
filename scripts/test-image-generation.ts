@@ -262,11 +262,13 @@ try {
   resetEnv(); installFetch()
   process.env.DATA_DIR = dir
   process.env.HF_TOKEN = 'hf_testtokenvalue0001'
-  process.env.IMAGE_PROVIDERS = 'huggingface,pollinations'
+  process.env.GEMINI_API_KEY = 'AIzaTestGeminiKey0001234567890'
+  process.env.IMAGE_PROVIDERS = 'huggingface,gemini,pollinations'
   process.env.IMAGE_MONTHLY_CREDIT_CAP_USD = '0.004'
   process.env.IMAGE_ALLOW_PAID_OVERRUN = 'false'
   process.env.HF_IMAGE_PRICE_PER_MEGAPIXEL_USD = '0.003'
   handler = async (url) => {
+    if (url.includes('generativelanguage.googleapis.com')) throw new Error('gemini must not run after the cap')
     if (url.includes('/fal-ai/')) return json(200, { images: [{ url: 'https://cdn.example/flux.png' }] })
     if (url === 'https://cdn.example/flux.png') return png()
     if (url.includes('image.pollinations.ai')) return png()
@@ -277,6 +279,7 @@ try {
   const second = await img.runFlux('two')
   ok(first.engine === 'hf-fal' && second.engine === 'pollinations-classic' && second.watermark === true, `cap falls through to Pollinations (${second.engine})`)
   ok(urls().filter((u) => u.includes('/fal-ai/')).length === falBefore, 'cap: no further fal-ai request')
+  ok(!urls().some((u) => u.includes('generativelanguage')), 'cap does not continue to Gemini')
   img.resetImageGenForTests(); installFetch()
   process.env.DATA_DIR = dir
   process.env.IMAGE_PROVIDERS = 'huggingface'
@@ -300,6 +303,55 @@ try {
   const after402 = falHits
   const again = await img.runFlux('bill-2')
   ok(billed.engine === 'pollinations-classic' && again.engine === 'pollinations-classic' && after402 === 1 && falHits === 1, `402 stops further HF calls (fal hits ${falHits})`)
+
+  // A zero price must not turn the cap off. A billed generation whose file fails still counts.
+  img.resetImageGenForTests(); installFetch()
+  process.env.DATA_DIR = dir
+  process.env.IMAGE_PROVIDERS = 'huggingface,pollinations'
+  process.env.IMAGE_MONTHLY_CREDIT_CAP_USD = '0.001'
+  process.env.HF_IMAGE_PRICE_PER_MEGAPIXEL_USD = '0'
+  delete process.env.GEMINI_API_KEY
+  handler = async (url) => {
+    if (url.includes('/fal-ai/')) throw new Error('price zero must not call fal')
+    if (url.includes('image.pollinations.ai')) return png()
+    return new Response('no', { status: 500 })
+  }
+  const zeroPrice = await img.runFlux('zero')
+  ok(zeroPrice.engine === 'pollinations-classic' && urls().length === 1 && urls()[0].includes('pollinations'), 'non-positive price still uses the default estimate')
+
+  img.resetImageGenForTests(); installFetch()
+  process.env.DATA_DIR = dir
+  process.env.IMAGE_MONTHLY_CREDIT_CAP_USD = '0.004'
+  process.env.HF_IMAGE_PRICE_PER_MEGAPIXEL_USD = '0.003'
+  process.env.HF_FLUX_MODEL = 'black-forest-labs/FLUX.1-dev'
+  process.env.HF_IMAGE_MODEL = 'black-forest-labs/FLUX.1-schnell'
+  let devCalls = 0
+  handler = async (url) => {
+    if (url.includes('/flux/dev')) { devCalls++; return json(200, { images: [{ url: 'https://cdn.example/flux.png' }] }) }
+    if (url.includes('/flux/schnell')) return json(200, { images: [{ url: 'https://cdn.example/flux.png' }] })
+    if (url === 'https://cdn.example/flux.png') return new Response('missing', { status: 404 })
+    if (url.includes('image.pollinations.ai')) return png()
+    return new Response('no', { status: 500 })
+  }
+  const lost = await img.runFlux('lost-file')
+  const lostFal = urls().filter((u) => u.includes('/fal-ai/')).length
+  const lostAgain = await img.runFlux('lost-file-2')
+  ok(lost.engine === 'pollinations-classic' && lostAgain.engine === 'pollinations-classic' && devCalls === 0 && lostFal === 1, `HF_IMAGE_MODEL wins, and a billed download failure still spends the cap (fal ${lostFal})`)
+  delete process.env.HF_FLUX_MODEL
+  delete process.env.HF_IMAGE_MODEL
+
+  img.resetImageGenForTests(); installFetch()
+  process.env.DATA_DIR = dir
+  process.env.IMAGE_PROVIDERS = 'huggingface'
+  process.env.IMAGE_MONTHLY_CREDIT_CAP_USD = '1.50'
+  handler = async (url) => {
+    if (url.includes('/fal-ai/')) return json(200, { images: [{ url: 'https://127.0.0.1/secret.png' }] })
+    if (url.includes('127.0.0.1')) throw new Error('ssrf')
+    return new Response('no', { status: 500 })
+  }
+  let privateMsg = ''
+  try { await img.runFlux('private') } catch (e: any) { privateMsg = e.message }
+  ok(/image url rejected/.test(privateMsg) && !urls().some((u) => u.includes('127.0.0.1')), `router image URL cannot target a private host (${privateMsg.slice(0, 100)})`)
 
   // No nscale image route. fal-ai is the HF router path.
   const files: string[] = []

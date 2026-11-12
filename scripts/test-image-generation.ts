@@ -14,6 +14,7 @@ const KEYS = [
   'IMAGE_GENERATION_TIMEOUT_MS', 'IMAGE_DOWNLOAD_MAX_BYTES', 'GEMINI_API_KEY', 'GEMINI_IMAGE_MODEL',
   'LOCAL_IMAGE_URL', 'LOCAL_IMAGE_ENDPOINT', 'LOCAL_IMAGE_KIND', 'LOCAL_IMAGE_TOKEN', 'COMFY_CHECKPOINT',
   'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_IMAGE_MODEL', 'OPENAI_IMAGE_BASE_URL',
+  'IMAGE_MONTHLY_CREDIT_CAP_USD', 'IMAGE_ALLOW_PAID_OVERRUN', 'HF_IMAGE_PRICE_PER_MEGAPIXEL_USD', 'HF_FLUX_MODEL', 'HF_FLUX_PROVIDER',
   'REPLICATE_API_TOKEN', 'REPLICATE_IMAGE_MODEL', 'ENABLE_PAID_REPLICATE', 'LLM_PROVIDERS'
 ]
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
@@ -47,7 +48,7 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } })
 const png = (headers: Record<string, string> = {}) => new Response(PNG, { status: 200, headers: { 'content-type': 'image/png', ...headers } })
 const urls = () => calls.map((c) => c.url)
-const paid = () => urls().some((u) => /api\.openai\.com|api\.replicate\.com|fal-ai|nscale/.test(u))
+const paid = () => urls().some((u) => /api\.openai\.com|api\.replicate\.com|nscale/.test(u))
 
 resetEnv()
 installFetch()
@@ -68,7 +69,8 @@ try {
   process.env.IMAGE_PROVIDERS = 'none'
   ok(img.listedImageProviders().length === 0, 'none selects nothing')
 
-  // Hugging Face tries FLUX, then SDXL. No fal-ai, no OpenAI.
+  // Hugging Face FLUX goes through the router fal-ai path, not hf-inference.
+  img.resetImageGenForTests()
   resetEnv(); installFetch(); warnings.length = 0
   process.env.DATA_DIR = dir
   process.env.HF_TOKEN = 'hf_testtokenvalue0001'
@@ -76,17 +78,26 @@ try {
   process.env.OPENAI_API_KEY = 'sk-test-openai-key-0001'
   process.env.OPENAI_BASE_URL = 'https://api.x.ai/v1'
   process.env.REPLICATE_API_TOKEN = 'r8_testreplicatetoken0001'
-  handler = async (url) => {
-    if (url.includes('FLUX.1-schnell')) return json(503, { error: 'model loading' })
-    if (url.includes('stable-diffusion-xl-base-1.0')) return png()
+  handler = async (url, init) => {
+    if (url.includes('hf-inference')) throw new Error('hf-inference must not be called')
+    if (url.includes('api.openai.com') || url.includes('api.replicate.com') || url.includes('nscale')) throw new Error('paid host ' + url)
+    if (url === 'https://router.huggingface.co/fal-ai/fal-ai/flux/schnell') {
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization || ''
+      if (!auth.includes('hf_testtokenvalue0001')) return json(401, { error: 'missing token' })
+      const body = JSON.parse(String(init?.body))
+      if (body.prompt !== 'hf fox' || body.num_inference_steps !== 4) return json(400, { error: 'bad body' })
+      return json(200, { images: [{ url: 'https://cdn.example/flux.png' }] })
+    }
+    if (url === 'https://cdn.example/flux.png') return png()
     throw new Error('unexpected ' + url)
   }
-  const sdxl = await img.runFlux('hf fox')
-  ok(sdxl.engine === 'huggingface' && sdxl.model.includes('stable-diffusion-xl') && sdxl.costMode === 'free' && sdxl.mocked === false, `SDXL after FLUX fails (${sdxl.model})`)
-  ok(urls().length === 2 && urls().every((u) => u.includes('router.huggingface.co/hf-inference/models/')), `both calls are HF inference (${urls().join(' | ')})`)
-  ok(!paid(), 'FLUX/SDXL path does not call fal-ai, nscale, OpenAI, or Replicate')
+  const flux = await img.runFlux('hf fox')
+  ok(flux.engine === 'hf-fal' && flux.model.includes('FLUX.1-schnell') && flux.costMode === 'included-credit' && flux.mocked === false, `fal FLUX metadata (${flux.engine}, ${flux.model}, ${flux.costMode})`)
+  ok(urls().filter((u) => u.includes('router.huggingface.co')).length === 1, `one HF router call (${urls().join(' | ')})`)
+  ok(!urls().some((u) => u.includes('hf-inference') || u.includes('nscale') || u.includes('api.openai.com')), 'no hf-inference, nscale, or OpenAI')
 
-  // Fallback: HF and Gemini fail, Pollinations succeeds. Paid hosts are not called.
+  // Fallback: HF and Gemini fail, Pollinations succeeds. OpenAI and Replicate are not called.
+  img.resetImageGenForTests()
   resetEnv(); installFetch(); warnings.length = 0
   process.env.DATA_DIR = dir
   process.env.HF_TOKEN = 'hf_testtokenvalue0001'
@@ -102,7 +113,7 @@ try {
   const fell = await img.runFlux('a red fox')
   ok(fell.engine === 'pollinations-classic' && fell.costMode === 'free' && fell.watermark === true, `falls through to Pollinations (${fell.engine})`)
   const hosts = urls().map((u) => new URL(u).host)
-  ok(hosts.join(',') === 'router.huggingface.co,router.huggingface.co,generativelanguage.googleapis.com,image.pollinations.ai', `order ${hosts.join(',')}`)
+  ok(hosts.join(',') === 'router.huggingface.co,generativelanguage.googleapis.com,image.pollinations.ai', `order ${hosts.join(',')}`)
   ok(!paid(), 'unlisted paid hosts are not called')
   const geminiCall = calls.find((c) => c.url.includes('generativelanguage'))!
   ok(!geminiCall.url.includes('AIza'), 'Gemini key stays out of the URL')
@@ -246,12 +257,56 @@ try {
   ok(ran.status === 'failed' && /Image generation failed|refund/i.test(ran.results.gen?.error || ''), `strict pipeline fails (${ran.results.gen?.error})`)
   ok(!ran.imageUrl, 'strict pipeline does not keep a placeholder image')
 
-  // No fal-ai or nscale image route remains in the server.
+  // Cap stops another fal-ai call and preview falls through to Pollinations. Buyer strict refunds.
+  img.resetImageGenForTests()
+  resetEnv(); installFetch()
+  process.env.DATA_DIR = dir
+  process.env.HF_TOKEN = 'hf_testtokenvalue0001'
+  process.env.IMAGE_PROVIDERS = 'huggingface,pollinations'
+  process.env.IMAGE_MONTHLY_CREDIT_CAP_USD = '0.004'
+  process.env.IMAGE_ALLOW_PAID_OVERRUN = 'false'
+  process.env.HF_IMAGE_PRICE_PER_MEGAPIXEL_USD = '0.003'
+  handler = async (url) => {
+    if (url.includes('/fal-ai/')) return json(200, { images: [{ url: 'https://cdn.example/flux.png' }] })
+    if (url === 'https://cdn.example/flux.png') return png()
+    if (url.includes('image.pollinations.ai')) return png()
+    return new Response('no', { status: 500 })
+  }
+  const first = await img.runFlux('one')
+  const falBefore = urls().filter((u) => u.includes('/fal-ai/')).length
+  const second = await img.runFlux('two')
+  ok(first.engine === 'hf-fal' && second.engine === 'pollinations-classic' && second.watermark === true, `cap falls through to Pollinations (${second.engine})`)
+  ok(urls().filter((u) => u.includes('/fal-ai/')).length === falBefore, 'cap: no further fal-ai request')
+  img.resetImageGenForTests(); installFetch()
+  process.env.DATA_DIR = dir
+  process.env.IMAGE_PROVIDERS = 'huggingface'
+  process.env.IMAGE_MONTHLY_CREDIT_CAP_USD = '0.001'
+  let capErr = ''
+  try { await img.runFlux('buyer', { strict: true }) } catch (e: any) { capErr = e.message }
+  ok(/cap-exceeded/.test(capErr) && /refund/i.test(capErr) && urls().every((u) => !u.includes('/fal-ai/')), `strict cap refunds without calling fal (${capErr.slice(0, 120)})`)
+
+  // HF 402 exhausts the included credits and the next preview does not call fal again.
+  img.resetImageGenForTests(); installFetch()
+  process.env.DATA_DIR = dir
+  process.env.IMAGE_MONTHLY_CREDIT_CAP_USD = '1.50'
+  process.env.IMAGE_PROVIDERS = 'huggingface,pollinations'
+  let falHits = 0
+  handler = async (url) => {
+    if (url.includes('/fal-ai/')) { falHits++; return json(402, { error: 'credits exhausted' }) }
+    if (url.includes('image.pollinations.ai')) return png()
+    return new Response('no', { status: 500 })
+  }
+  const billed = await img.runFlux('bill')
+  const after402 = falHits
+  const again = await img.runFlux('bill-2')
+  ok(billed.engine === 'pollinations-classic' && again.engine === 'pollinations-classic' && after402 === 1 && falHits === 1, `402 stops further HF calls (fal hits ${falHits})`)
+
+  // No nscale image route. fal-ai is the HF router path.
   const files: string[] = []
   const walk = (d: string) => { for (const name of readdirSync(d)) { const p = join(d, name); if (name === 'node_modules' || name === 'dist' || name === 'vendor') continue; const st = statSync(p); if (st.isDirectory()) walk(p); else if (/\.(ts|tsx|mjs|js)$/.test(name)) files.push(p) } }
   walk('server'); walk('src')
   const blob = files.map((p) => readFileSync(p, 'utf8')).join('\n')
-  ok(!blob.includes('router.huggingface.co/fal-ai') && !blob.includes('/nscale/'), 'fal-ai and nscale image routes are gone')
+  ok(blob.includes('router.huggingface.co/fal-ai/') && !blob.includes('/nscale/') && !blob.includes('hf-inference/models/'), 'fal-ai router is the HF path; nscale and hf-inference are not')
   ok(blob.includes('https://api.openai.com/v1') && blob.includes('IMAGE_PROVIDERS'), 'OpenAI images exist only behind the provider list')
 } catch (e: any) {
   console.error('THREW', e)

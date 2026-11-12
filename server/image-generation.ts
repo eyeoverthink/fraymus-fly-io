@@ -1,12 +1,15 @@
 // Free-first image generation. runFlux is the only image entry point
 // (canvas, /api/flux, buyer pipeline, generate_image).
 //
-// Default order: Hugging Face inference (FLUX.1-schnell, then SDXL) -> Gemini
+// Default order: Hugging Face router fal-ai FLUX.1-schnell (included subscription
+// credits, local monthly cap; IMAGE_ALLOW_PAID_OVERRUN defaults off) -> Gemini
 // (only when GEMINI_API_KEY is set; Google lists no free tier for that image model)
 // -> Pollinations (no key) -> a local server (LOCAL_IMAGE_URL).
 // OpenAI Images and Replicate are called only when that name is listed in
 // IMAGE_PROVIDERS and its key is set. A key alone does nothing.
 // If every provider that actually ran fails, the error names each one and why.
+import { mkdirSync, rmSync } from 'node:fs'
+import { dirname } from 'node:path'
 import sharp from 'sharp'
 
 export type CostMode = 'free' | 'paid' | 'included-credit' | 'offline'
@@ -46,6 +49,101 @@ function num(v: string | undefined, fallback: number) {
 }
 function timeoutMs() { return Math.max(1000, num(process.env.IMAGE_GENERATION_TIMEOUT_MS, 90_000)) }
 function maxBytes() { return Math.max(1024, num(process.env.IMAGE_DOWNLOAD_MAX_BYTES, 25_000_000)) }
+function monthlyCap() { return Math.max(0, num(process.env.IMAGE_MONTHLY_CREDIT_CAP_USD, 1.5)) }
+function pricePerMp() { return Math.max(0, num(process.env.HF_IMAGE_PRICE_PER_MEGAPIXEL_USD, 0.003)) }
+function monthKey(d = new Date()) { return d.toISOString().slice(0, 7) }
+function estimateUsd(w: number, h: number) { return (w * h / 1_000_000) * pricePerMp() }
+function overrunAllowed() {
+  const v = (process.env.IMAGE_ALLOW_PAID_OVERRUN || '').trim().toLowerCase()
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes'
+}
+
+const FAL_IDS: Record<string, string> = {
+  'black-forest-labs/FLUX.1-schnell': 'fal-ai/flux/schnell',
+  'black-forest-labs/FLUX.1-dev': 'fal-ai/flux/dev',
+  'stabilityai/stable-diffusion-xl-base-1.0': 'fal-ai/fast-sdxl'
+}
+const HF_W = 1024
+const HF_H = 1024
+
+let budget: any = null
+let budgetPath = ''
+let budgetOpen: Promise<void> | null = null
+let budgetGate: Promise<void> = Promise.resolve()
+
+function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const run = budgetGate.then(fn, fn)
+  budgetGate = run.then(() => undefined, () => undefined)
+  return run
+}
+
+async function budgetDb() {
+  const path = `${process.env.DATA_DIR || './data'}/image-budget.sqlite`
+  if (budget && budgetPath === path) return budget
+  if (!budgetOpen) {
+    budgetOpen = (async () => {
+      if (budget) { try { budget.close() } catch { /* already closed */ } budget = null }
+      mkdirSync(dirname(path), { recursive: true })
+      const { DatabaseSync } = await import('node:sqlite')
+      budget = new DatabaseSync(path)
+      budget.exec(`create table if not exists image_calls (
+        id integer primary key autoincrement,
+        month text not null,
+        provider text not null,
+        status text not null,
+        estimated_usd real not null,
+        actual_usd real,
+        width integer,
+        height integer,
+        created_at integer not null
+      )`)
+      budgetPath = path
+    })()
+  }
+  await budgetOpen
+  budgetOpen = null
+  return budget
+}
+
+async function reserveHf(estimate: number): Promise<{ id: number } | { blocked: true }> {
+  return exclusive(async () => {
+    const db = await budgetDb()
+    const month = monthKey()
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const row = db.prepare(`select coalesce(sum(estimated_usd), 0) as spent from image_calls where month = ? and status in ('reserved', 'succeeded', 'quota-exhausted')`).get(month) as { spent: number }
+      const spent = Number(row?.spent) || 0
+      const quota = db.prepare(`select count(*) as n from image_calls where month = ? and status = 'quota-exhausted'`).get(month) as { n: number }
+      if (Number(quota?.n) > 0 || (!overrunAllowed() && spent + estimate > monthlyCap() + 1e-9)) {
+        db.prepare(`insert into image_calls (month, provider, status, estimated_usd, created_at) values (?, 'hf-fal', 'cap-blocked', 0, ?)`).run(month, Date.now())
+        db.exec('COMMIT')
+        return { blocked: true }
+      }
+      const info = db.prepare(`insert into image_calls (month, provider, status, estimated_usd, created_at) values (?, 'hf-fal', 'reserved', ?, ?)`).run(month, estimate, Date.now())
+      db.exec('COMMIT')
+      return { id: Number(info.lastInsertRowid) }
+    } catch (e) {
+      try { db.exec('ROLLBACK') } catch { /* no open transaction */ }
+      throw e
+    }
+  })
+}
+
+async function finishHf(id: number, width: number, height: number) {
+  const db = await budgetDb()
+  db.prepare(`update image_calls set status = 'succeeded', actual_usd = ?, width = ?, height = ? where id = ?`).run(estimateUsd(width, height), width, height, id)
+}
+
+async function releaseHf(id: number) {
+  const db = await budgetDb()
+  db.prepare(`update image_calls set status = 'failed', actual_usd = 0 where id = ?`).run(id)
+}
+
+/** HF said the included credits are gone. Later calls skip fal-ai until next month. */
+async function exhaustHfQuota() {
+  const db = await budgetDb()
+  db.prepare(`insert into image_calls (month, provider, status, estimated_usd, created_at) values (?, 'hf-fal', 'quota-exhausted', ?, ?)`).run(monthKey(), monthlyCap(), Date.now())
+}
 
 export function redactSecrets(text: string, env: NodeJS.ProcessEnv = process.env): string {
   let s = String(text || '')
@@ -66,7 +164,7 @@ function clip(s: string, max = 180) {
   return redactSecrets(s).replace(/\s+/g, ' ').trim().slice(0, max)
 }
 
-/** Names from IMAGE_PROVIDERS (or the buyer list when strict). `hf-fal` is the free HF inference alias, not fal-ai. */
+/** Names from IMAGE_PROVIDERS (or the buyer list when strict). `hf-fal` is the Hugging Face router path. */
 export function listedImageProviders(opts: { strict?: boolean } = {}): string[] {
   const raw = opts.strict
     ? (process.env.BUYER_IMAGE_PROVIDERS ?? 'huggingface')
@@ -172,30 +270,68 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 function hfModels(): string[] {
-  if (process.env.HF_IMAGE_MODEL?.trim()) return [process.env.HF_IMAGE_MODEL.trim()]
-  return (process.env.HF_IMAGE_MODELS || 'black-forest-labs/FLUX.1-schnell,stabilityai/stable-diffusion-xl-base-1.0')
+  const one = process.env.HF_FLUX_MODEL?.trim() || process.env.HF_IMAGE_MODEL?.trim()
+  if (one) return [one]
+  return (process.env.HF_IMAGE_MODELS || 'black-forest-labs/FLUX.1-schnell')
     .split(',').map((s) => s.trim()).filter(Boolean)
 }
 
+// FLUX through the HF router. hf-inference returns HTTP 410 for these models.
+// fal-ai is billed by Hugging Face against included subscription credits.
 async function fromHuggingFace(prompt: string): Promise<{ png: Buffer; model: string }> {
+  const provider = (process.env.HF_FLUX_PROVIDER || 'fal-ai').trim().toLowerCase()
+  if (provider !== 'fal-ai') throw new Error(`unsupported HF_FLUX_PROVIDER ${provider}; fal-ai is the routed provider`)
   const errors: string[] = []
+  let reserved = false
   for (const model of hfModels()) {
-    const schnell = /schnell/i.test(model)
+    const id = FAL_IDS[model]
+    if (!id) { errors.push(`${model} no fal-ai mapping`); continue }
+    const slot = await reserveHf(estimateUsd(HF_W, HF_H))
+    if ('blocked' in slot) throw new Error('cap-exceeded')
+    reserved = true
     try {
-      const res = await postJson(`https://router.huggingface.co/hf-inference/models/${model}`, {
+      const schnell = /schnell/i.test(model)
+      const res = await postJson(`https://router.huggingface.co/fal-ai/${id}`, {
         Authorization: `Bearer ${process.env.HF_TOKEN}`,
-        'Content-Type': 'application/json',
-        Accept: 'image/png'
-      }, { inputs: prompt, parameters: { num_inference_steps: schnell ? 4 : 20, guidance_scale: schnell ? 0 : 7.5 } })
-      const buf = await readLimited(res)
-      const ct = res.headers.get('content-type') || ''
-      if (res.ok && isImage(buf, ct)) return { png: buf, model }
-      errors.push(`${model} ${errorDetail(res.status, buf.toString('utf8').slice(0, 400))}`)
+        'Content-Type': 'application/json'
+      }, {
+        prompt,
+        num_inference_steps: schnell ? 4 : 28,
+        image_size: { width: HF_W, height: HF_H }
+      })
+      const text = await res.text()
+      if (!res.ok) {
+        if (res.status === 402) await exhaustHfQuota()
+        const stop = res.status === 401 || res.status === 402 || res.status === 403
+        errors.push(`${model} ${errorDetail(res.status, text.slice(0, 400))}`)
+        await releaseHf(slot.id)
+        if (stop) break
+        continue
+      }
+      let imgUrl = ''
+      try { imgUrl = JSON.parse(text)?.images?.[0]?.url || '' } catch { /* not json */ }
+      if (!imgUrl) {
+        errors.push(`${model} invalid json`)
+        await releaseHf(slot.id)
+        continue
+      }
+      const ir = await imageFetch(imgUrl, { signal: AbortSignal.timeout(timeoutMs()) })
+      if (!ir.ok) {
+        errors.push(`${model} image download ${ir.status}`)
+        await releaseHf(slot.id)
+        continue
+      }
+      const norm = await normalizePng(await readLimited(ir))
+      await finishHf(slot.id, norm.width, norm.height)
+      return { png: norm.png, model }
     } catch (e: any) {
+      if (String(e?.message || e) === 'cap-exceeded') throw e
+      try { await releaseHf(slot.id) } catch { /* reservation already closed */ }
       errors.push(`${model} ${clip(e?.message || String(e))}`)
     }
   }
-  throw new Error(errors.join('; ') || 'no Hugging Face image model configured')
+  if (!reserved && errors.length === 0) throw new Error('cap-exceeded')
+  throw new Error(errors.join('; ') || 'Hugging Face image failed')
 }
 
 async function fromGemini(prompt: string): Promise<{ png: Buffer; model: string }> {
@@ -443,7 +579,7 @@ async function callProvider(name: string, prompt: string, attempts: ImageAttempt
     let out: { png: Buffer; model: string }
     let cost: CostMode = 'free'
     let engine = name
-    if (name === 'huggingface') { out = await fromHuggingFace(prompt); engine = 'huggingface' }
+    if (name === 'huggingface') { out = await fromHuggingFace(prompt); engine = 'hf-fal'; cost = 'included-credit' }
     else if (name === 'gemini') { out = await fromGemini(prompt); cost = 'paid'; engine = 'gemini' }
     else if (name === 'local') { out = await fromLocal(prompt); engine = 'local' }
     else if (name === 'openai') { out = await fromOpenAI(prompt); cost = 'paid'; engine = 'openai' }
@@ -481,6 +617,11 @@ export function resetImageGenForTests() {
   pollCache.clear()
   pollTail = Promise.resolve()
   fetchOverride = null
+  const path = budgetPath || `${process.env.DATA_DIR || './data'}/image-budget.sqlite`
+  if (budget) { try { budget.close() } catch { /* already closed */ } budget = null }
+  budgetPath = ''
+  budgetOpen = null
+  try { rmSync(path, { force: true }) } catch { /* no budget file yet */ }
 }
 
 export async function runFlux(prompt: string, opts: { strict?: boolean } = {}): Promise<ImageResult> {

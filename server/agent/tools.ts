@@ -111,7 +111,7 @@ export const builtinTools: Tool[] = [
     }
   },
   {
-    name: 'generate_image', risk: 'safe', description: 'Generate an image from a text prompt. Hugging Face uses FLUX.1-schnell through the fal-ai router and included subscription credits. Gemini runs only if GEMINI_API_KEY is set and Hugging Face did not stop for the credit cap. Then Pollinations, or a local server. OpenAI and Replicate are not called unless IMAGE_PROVIDERS lists them and their key is set. Returns imageUrl, engine, costMode and watermark.',
+    name: 'generate_image', risk: 'safe', description: 'Generate an image from a text prompt using the free chain: the public FLUX.1-schnell Space, Free Studio when it is configured, then Pollinations. OpenAI, Replicate, and Gemini are not called unless IMAGE_PROVIDERS lists them and their key is set. Returns imageUrl, engine, costMode and watermark.',
     parameters: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
     async run(a) {
       const img = await runFlux(String(a.prompt || ''))

@@ -11,7 +11,7 @@ export function FluxNode({ data, selected }: NodeProps) {
         prompt → image (1024x1024)<br/>cost: $0 • 4 steps • commercial use OK
       </div>
       {d.lastOutput?.engine && <div style={{ marginTop: 8, fontSize: 10, color: d.lastOutput.watermark || d.lastOutput.mocked ? '#fbbf24' : '#86efac' }}>
-        {d.lastOutput.mocked ? 'Offline placeholder' : d.lastOutput.watermark ? 'Watermarked free tier' : d.lastOutput.costMode === 'included-credit' ? 'Included HF credits' : d.lastOutput.costMode === 'paid' ? 'Paid provider' : d.lastOutput.costMode === 'free' ? 'Free provider' : (d.lastOutput.costMode || 'Image')}
+        {d.lastOutput.mocked ? 'Offline placeholder' : d.lastOutput.watermark ? 'Watermarked free tier' : d.lastOutput.costMode === 'paid' ? 'Paid provider' : d.lastOutput.costMode === 'free' ? 'Free provider' : (d.lastOutput.costMode || 'Image')}
         {' · '}{d.lastOutput.engine}
       </div>}
       {d.lastOutput?.imageUrl && <div style={{ marginTop: 8, borderRadius: 8, overflow: 'hidden', border: '1px solid #333' }}><img src={d.lastOutput.imageUrl} alt="" style={{ width: '100%' }} /></div>}

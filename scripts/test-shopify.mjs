@@ -17,7 +17,7 @@ async function boot(extra) {
   const dataDir = mkdtempSync(join(tmpdir(), 'shopify-test-'))
   const env = { ...process.env, PORT: port, HOST: '127.0.0.1', DATA_DIR: dataDir, LLM_PROVIDERS: 'none', SCHEDULER: 'off',
     SHOPIFY_WEBHOOK_SECRET: SECRET, BUYER_CODE_DEV_ECHO: '1', NODE_ENV: 'test', WORKSPACE_AUTH: 'off', WORKSPACE_ACCESS_TOKEN: '',
-    GROQ_API_KEY: '', HF_TOKEN: '', REPLICATE_API_TOKEN: '', ENABLE_PAID_REPLICATE: '', OPENAI_API_KEY: '', OPENAI_BASE_URL: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', IMAGE_PROVIDERS: 'placeholder', ...extra }
+    GROQ_API_KEY: '', HF_TOKEN: '', REPLICATE_API_TOKEN: '', ENABLE_PAID_REPLICATE: '', OPENAI_API_KEY: '', OPENAI_BASE_URL: '', CLERK_SECRET_KEY: '', SUPABASE_URL: '', FREE_CREDITS: '', IMAGE_PROVIDERS: 'placeholder', BUYER_IMAGE_PROVIDERS: 'placeholder', FREE_STUDIO_URL: '', FREE_STUDIO_PASS: '', FREE_STUDIO_MEDIA_KEY: '', ...extra }
   const p = spawn('npx', ['tsx', 'server/index.ts'], { env, stdio: process.env.DEBUG ? 'inherit' : 'ignore' })
   const base = `http://127.0.0.1:${port}`
   for (let i = 0; i < 80; i++) { try { if ((await fetch(base + '/health')).ok) break } catch {} await new Promise((r) => setTimeout(r, 500)) }

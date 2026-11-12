@@ -83,7 +83,7 @@ allow-list). Release v12 lacked the package and every live call failed with `SSL
 them. The chain prices unknown models at its most expensive known rate, so the cap holds even for new model names.
 
 **Live seats.** These are built from server-side env names only, in the order set by `LOGIC_CHAIN_PROVIDERS` (default
-`xai,gemini,openai`). Only providers with a key are seated. The 8 roles rotate across them, and the Integrator, which
+`xai,gemini`). OpenAI is seated only when that list includes `openai`. Only providers with a key are seated. The 8 roles rotate across them, and the Integrator, which
 writes the brief, gets the first one.
 
 | Provider | Key | Model (default) | Endpoint |

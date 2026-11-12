@@ -61,7 +61,8 @@ function providerKeys(): Record<'xai' | 'openai' | 'gemini', Key | null> {
   const gemini = env.GEMINI_API_KEY ? { name: 'GEMINI_API_KEY', value: env.GEMINI_API_KEY, from: 'GEMINI_API_KEY' } : null
   return { xai, openai, gemini }
 }
-const enabledProviders = () => (process.env.LOGIC_CHAIN_PROVIDERS || 'xai,gemini,openai').split(',').map((s) => s.trim()).filter(Boolean)
+// OpenAI is not in the default seat list. Set LOGIC_CHAIN_PROVIDERS to include openai to opt in.
+const enabledProviders = () => (process.env.LOGIC_CHAIN_PROVIDERS || 'xai,gemini').split(',').map((s) => s.trim()).filter(Boolean)
 type Seat = { provider: string; kind: string; model: string; url?: string; key_env?: string }
 export function liveSeats(): Seat[] {
   const k = providerKeys(), env = process.env, seats: Seat[] = []

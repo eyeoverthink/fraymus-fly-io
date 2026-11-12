@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
-import { imageFetch } from './image-generation'
+import { imageFetch, replicateUpscaleOptIn } from './image-generation'
 
 export { runFlux } from './image-generation'
 export type { ImageResult, CostMode } from './image-generation'
@@ -9,30 +9,43 @@ export type { ImageResult, CostMode } from './image-generation'
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const DEFAULT_SYSTEM = 'You are a FLUX prompt engineer. Convert user ideas into detailed, photorealistic FLUX.1 schnell prompts. Be specific about lighting, camera, texture. Output only the prompt.'
 
-// Prompt step. Engines, in order: Groq (GROQ_API_KEY), any OpenAI-compatible endpoint such as the
-// Hostinger router (PROMPT_LLM_BASE_URL/PROMPT_LLM_API_KEY, falling back to OPENAI_BASE_URL/OPENAI_API_KEY),
-// otherwise a fixed template (mocked=true). PROMPT_LLM=groq|openai|template forces one.
+function hostIsXai(url: string) {
+  try { return /(^|\.)x\.ai$/i.test(new URL(url).hostname) } catch { return false }
+}
+function openaiChatOptIn() {
+  return (process.env.LLM_PROVIDERS || '').split(',').map((s) => s.trim()).includes('openai')
+}
+
+// Prompt step. Groq when GROQ_API_KEY is set. Otherwise the OpenAI-compatible prompt endpoint
+// (PROMPT_LLM_BASE_URL + PROMPT_LLM_API_KEY), which on Fly is https://api.x.ai/v1.
+// OPENAI_BASE_URL / OPENAI_API_KEY are used only when LLM_PROVIDERS lists openai.
+// PROMPT_LLM=groq|openai|xai|template forces one. Missing config returns a template (mocked=true).
 export async function runLlama(prompt: string, system = DEFAULT_SYSTEM): Promise<{ text: string; mocked?: boolean; engine: string }> {
   const groqKey = process.env.GROQ_API_KEY
-  const oaBase = process.env.PROMPT_LLM_BASE_URL || process.env.OPENAI_BASE_URL
-  const oaKey = process.env.PROMPT_LLM_API_KEY || process.env.OPENAI_API_KEY
+  const promptBase = process.env.PROMPT_LLM_BASE_URL || ''
+  const promptKey = process.env.PROMPT_LLM_API_KEY || ''
+  const openaiAllowed = openaiChatOptIn()
+  const oaBase = promptBase || (openaiAllowed ? process.env.OPENAI_BASE_URL || '' : '')
+  const oaKey = promptBase ? promptKey : (openaiAllowed ? process.env.OPENAI_API_KEY || '' : '')
   const pick = process.env.PROMPT_LLM || (groqKey ? 'groq' : oaBase && oaKey ? 'openai' : 'template')
-  if (pick === 'template' || (pick === 'groq' && !groqKey) || (pick === 'openai' && !(oaBase && oaKey))) {
+  if (pick === 'template' || (pick === 'groq' && !groqKey) || ((pick === 'openai' || pick === 'xai') && !(oaBase && oaKey))) {
     return { text: `Photorealistic ${prompt.slice(0, 200)}, UGC mirror selfie, iPhone flash, natural skin texture, 8k, ultra detailed`, mocked: true, engine: 'template' }
   }
-  const url = pick === 'groq' ? GROQ_URL : `${oaBase!.replace(/\/$/, '')}/chat/completions`
-  const model = pick === 'groq' ? (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile') : (process.env.PROMPT_LLM_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini')
+  const xai = pick !== 'groq' && hostIsXai(oaBase)
+  const url = pick === 'groq' ? GROQ_URL : `${oaBase.replace(/\/$/, '')}/chat/completions`
+  const model = pick === 'groq' ? (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile') : (process.env.PROMPT_LLM_MODEL || (xai ? 'grok-4.20-0309-non-reasoning' : '') || (openaiAllowed ? process.env.OPENAI_MODEL : '') || 'gpt-4o-mini')
   const headers: Record<string, string> = { Authorization: `Bearer ${pick === 'groq' ? groqKey : oaKey}`, 'Content-Type': 'application/json' }
-  if (pick === 'openai' && process.env.OPENAI_USER_AGENT) headers['User-Agent'] = process.env.OPENAI_USER_AGENT
+  if (pick !== 'groq' && !xai && process.env.OPENAI_USER_AGENT) headers['User-Agent'] = process.env.OPENAI_USER_AGENT
   const r = await fetch(url, {
     method: 'POST', headers, signal: AbortSignal.timeout(60000),
     body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }], max_tokens: 400, temperature: 0.8 })
   })
   const data: any = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(`${pick} prompt LLM failed ${r.status}: ${JSON.stringify(data).slice(0, 300)}`)
+  const engine = pick === 'groq' ? 'groq' : xai ? 'xai' : 'openai'
+  if (!r.ok) throw new Error(`${engine} prompt LLM failed ${r.status}: ${JSON.stringify(data).slice(0, 300)}`)
   const text = data.choices?.[0]?.message?.content
-  if (!text) throw new Error(`${pick} prompt LLM returned no text`)
-  return { text, engine: `${pick}:${model}` }
+  if (!text) throw new Error(`${engine} prompt LLM returned no text`)
+  return { text, engine: `${engine}:${model}` }
 }
 
 function removeInWorker(input: Buffer, timeoutMs = 180000): Promise<Buffer> {
@@ -97,8 +110,9 @@ export async function runUpscaler(input: Buffer, scale = 4): Promise<{ png: Buff
   let kind: 'resize' | 'ai-upscale' = 'resize'
   let png: Buffer | null = null
 
-  // A Replicate token alone must not spend money. ENABLE_PAID_REPLICATE=1 is the explicit opt-in.
-  if (process.env.ENABLE_PAID_REPLICATE === '1' && process.env.REPLICATE_API_TOKEN) {
+  // A token, or ENABLE_PAID_REPLICATE alone, must not spend money. Replicate runs only when
+  // IMAGE_PROVIDERS lists replicate, the token is set, and ENABLE_PAID_REPLICATE=1.
+  if (replicateUpscaleOptIn()) {
     try {
       const ai = await replicateUpscale(input, scale)
       png = await sharp(ai).resize(w * scale, h * scale, { kernel: 'lanczos3' }).png({ compressionLevel: 8 }).toBuffer()

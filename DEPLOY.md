@@ -61,10 +61,11 @@ If a Clerk user later signs in with the same verified email, the buyer balance m
       OPENAI_BASE_URL=https://router.hostinger.com/v1 OPENAI_API_KEY=... OPENAI_MODEL=gpt-5.6-luna \
       RESEND_API_KEY=re_... MAIL_FROM="FRAYMUS <codes@yourdomain.com>" \
       PUBLIC_URL=https://<app>.fly.dev
-    # optional: GROQ_API_KEY (instead of the router). REPLICATE_API_TOKEN does not enable upscaling;
-    #           set ENABLE_PAID_REPLICATE=1 only to allow paid Real-ESRGAN. Image generation uses included
-    #           HF FLUX (fal-ai, $1.50 local cap) then watermarked Pollinations. OpenAI Images is never called.
-    #           Buyer runs stay on BUYER_IMAGE_PROVIDERS=hf-fal and refund when that route cannot answer.
+    # Chat uses the existing PROMPT_LLM_API_KEY against https://api.x.ai/v1 (LLM_PROVIDERS=xai,groq).
+    # optional: GROQ_API_KEY. OpenAI chat/images only if LLM_PROVIDERS or IMAGE_PROVIDERS names openai.
+    #           REPLICATE_API_TOKEN does nothing unless IMAGE_PROVIDERS lists replicate and
+    #           ENABLE_PAID_REPLICATE=1. Images: HF FLUX then SDXL, optional Gemini, Pollinations, local.
+    #           Buyer runs stay on BUYER_IMAGE_PROVIDERS=huggingface and refund when that route cannot answer.
     #           CLERK_SECRET_KEY / VITE_CLERK_PUBLISHABLE_KEY (locks the workspace UI to signed-in users), MCP_ADMIN_TOKEN
     fly deploy
     curl https://<app>.fly.dev/health

@@ -47,9 +47,9 @@ All settings are environment variables; [.env.example](.env.example) lists every
 |---|---|
 | Server | `PORT` (3001), `HOST` (0.0.0.0), `DATA_DIR` (`./data`, `/data` in Docker/Fly), `PUBLIC_URL`, `CORS_ORIGIN`; compose: `HOST_PORT`, `HOST_BIND` |
 | Auth | `CLERK_SECRET_KEY`, `VITE_CLERK_PUBLISHABLE_KEY`, `WORKSPACE_ACCESS_TOKEN`, `WORKSPACE_AUTH`, `OWNER_USER_IDS`, `MCP_ADMIN_TOKEN` |
-| LLMs | `LLM_PROVIDERS`, `OLLAMA_*`, `GROQ_*`, `OPENAI_BASE_URL/API_KEY/MODEL`, `PROMPT_LLM*`, `EMBED_*` |
+| LLMs | `LLM_PROVIDERS` (default `xai,groq`), `PROMPT_LLM*` / `XAI_*` for xAI, `GROQ_*` only with a key, `OPENAI_*` only when `openai` is listed, `EMBED_*` |
 | Organism stage 1 | `ORGANISM_TELEMETRY`, `MEMORY_NGRAM` (both default off; `on` / `1` / `true` to opt in) |
-| Images | `HF_TOKEN`, `IMAGE_PROVIDERS` (default `hf-fal,pollinations,placeholder`), `BUYER_IMAGE_PROVIDERS=hf-fal`, `IMAGE_MONTHLY_CREDIT_CAP_USD=1.50`. OpenAI Images is never used. Replicate stays off unless `ENABLE_PAID_REPLICATE=1`. |
+| Images | `HF_TOKEN`, `IMAGE_PROVIDERS` (default `huggingface,gemini,pollinations,local`), `BUYER_IMAGE_PROVIDERS=huggingface`. OpenAI and Replicate images run only when that name is listed and its key is set. |
 | Shopify / buyers | `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_PACK_PRODUCT_ID`, `SHOPIFY_CREDITS_PER_PACK`, `RESEND_API_KEY`, `MAIL_FROM`, `BUYER_PIPELINE_STRICT`, `FREE_CREDITS` |
 | Billing | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_METER_EVENT_NAME` |
 | Story Shorts | `PIPER_BIN`, `PIPER_MODEL`, `PIPER_LENGTH_SCALE`, `PIPER_SENTENCE_SILENCE`, `ESPEAK_*`, `FFMPEG_BIN`, `FFPROBE_BIN`, `SHORTS_MAX_CONCURRENT`, `SHORTS_FFMPEG_THREADS` |
@@ -60,7 +60,7 @@ Optional Supabase store instead of SQLite: `SUPABASE_URL` + `SUPABASE_SERVICE_KE
 
 ### Images
 
-Every canvas, pipeline, buyer, and agent image goes through `runFlux()`. The preview chain is Hugging Face fal-ai FLUX.1-schnell (included PRO credits, local cap $1.50 of the about $2 monthly credit, estimated at $0.003 per megapixel), then anonymous Pollinations, then a labelled offline placeholder. Pollinations adds a watermark, allows one request at a time, and can cache the prompt publicly, so do not send confidential text. Buyer runs use only `hf-fal` and refund when that route cannot answer. The cap is a local SQLite estimate, not the HF invoice; two machines on one HF account can still overshoot. OpenAI Images is never called. Gemini image generation stays off until included-credit billing is confirmed. A Replicate token does not upscale anything unless `ENABLE_PAID_REPLICATE=1`. Sharp output is a resize, not AI upscaling.
+Every canvas, pipeline, buyer, and agent image goes through `runFlux()`. The preview chain is Hugging Face inference (`HF_TOKEN`: FLUX.1-schnell, then SDXL), then Gemini only when `GEMINI_API_KEY` is set (Google lists no free tier for `gemini-2.5-flash-image`), then anonymous Pollinations, then a local server when `LOCAL_IMAGE_URL` is set. If every provider that ran fails, the error names each one and why. Nothing configured returns a labelled offline placeholder. Pollinations adds a watermark, runs one request at a time, and can cache the prompt publicly, so do not send confidential text. Buyer runs use only Hugging Face and refund when it cannot produce an image. OpenAI Images and Replicate are not called unless `IMAGE_PROVIDERS` lists that name and the matching key is set. Replicate upscale also needs `ENABLE_PAID_REPLICATE=1`. Sharp output is a resize, not AI upscaling. The background remover is local (`@imgly/background-removal`) and does not call a paid API.
 
 ## Health and tests
 
@@ -76,7 +76,7 @@ Everything the app makes is saved as a Library item (types: image, media, chat, 
 Open the **Agents** tab: chat with Concierge or any of the specialists defined in `agents/*.md`.
 Tools run automatically when safe; risky ones (`http_get`, `run_workflow`, HTTP tools) show an **Approve / Reject** card.
 
-- **Models**: `LLM_PROVIDERS` order (Ollama -> Groq -> OpenAI-compatible). Point `OLLAMA_HOST` at your VPS. With nothing configured, a clearly labeled offline mock answers (a banner is shown).
+- **Models**: `LLM_PROVIDERS` order (default `xai,groq`). xAI uses `XAI_API_KEY`, or `PROMPT_LLM_API_KEY` when `PROMPT_LLM_BASE_URL` is `https://api.x.ai/v1`. Groq runs only when `GROQ_API_KEY` is set. OpenAI runs only when `openai` is listed and `OPENAI_API_KEY` plus `OPENAI_BASE_URL` are set. Add `ollama` to the list to use `OLLAMA_HOST`. With nothing configured, a clearly labeled offline mock answers.
 - **Edit agents**: each agent is one manifest file, `agents/<id>.md` (front-matter: id, name, role, description, greeting, model, tools; body = system prompt). Edit the file, use the **Connect** tab, or let a connected agent do it over MCP; runtime edits are stored as overrides in `DATA_DIR/agents/` and win over the shipped defaults. Users can also create their own agents via `POST /api/agents`.
 - **HTTP tools**: `config/http-tools.json` defines tools backed by your own services (Fraynix engine, Hermes, TTS). **These endpoint paths and body shapes are templates I guessed; adapt them to your real APIs.** A tool is skipped until every `${ENV:NAME}` it references is set.
 - **Data**: threads, memories and approvals live in `DATA_DIR/agent.db` (local SQLite).
@@ -117,7 +117,7 @@ Cron-scheduled (5-field, **UTC**) agent runs or tool calls, replacing Base44 sch
 [FRAYMUS-Logic-Chain](https://github.com/eyeoverthink/FRAYMUS-Logic-Chain) is vendored at a pinned commit in `vendor/logic-chain` (see `UPSTREAM.md`; update it with `scripts/sync-logic-chain.sh <sha>`). The app runs it as a supervised child process on `127.0.0.1` inside the same container, so it needs no extra service, port or Fly process. Full details: [docs/LOGIC-CHAIN.md](docs/LOGIC-CHAIN.md).
 
 - **API**: `POST /api/logic-chain/runs` `{objective}` → `202`. Then `GET /api/logic-chain/runs/:id` (status, label, brief, Library links, `?full=1` = signed `run.json`), `GET .../verify`, `GET .../document`, `POST .../cancel`, `GET /api/logic-chain/status`, `GET /api/logic-chain/skills`, and `POST /api/logic-chain/skills/:id/agents`.
-- **Mock vs live**: runs are **MOCK** (demo fixtures, no network, $0, labelled MOCK everywhere) unless the owner sends `mode: "live"` with `approveSpend: true`. Live runs use server-side keys only (`XAI_API_KEY` or the x.ai `PROMPT_LLM_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`). They are capped at $1.00 and 60 calls by default. A run is labelled LIVE only if every stage used a real model and real stages completed; a live run where every call failed is labelled FAILED.
+- **Mock vs live**: runs are **MOCK** (demo fixtures, no network, $0, labelled MOCK everywhere) unless the owner sends `mode: "live"` with `approveSpend: true`. Live runs use server-side keys only (`XAI_API_KEY` or the x.ai `PROMPT_LLM_API_KEY`, `GEMINI_API_KEY`, and `OPENAI_API_KEY` only when `LOGIC_CHAIN_PROVIDERS` includes `openai`). They are capped at $1.00 and 60 calls by default. A run is labelled LIVE only if every stage used a real model and real stages completed; a live run where every call failed is labelled FAILED.
 - **Signing**: `FRAYMUS_IDENTITY_FILE` or the `FRAYMUS_IDENTITY_SEED` secret. If neither is set, a clearly labelled **LOCAL KEY** is used.
 - **Library + skills**: each run saves a brief, the signed `run.json` and its skill package (type `logic`). Skill packages are registered for **no** agent until you select agents. They are specifications, never executed.
 - **Agent tools**: `logic_chain_run` (approval), plus `logic_chain_status`, `logic_chain_verify` and `logic_chain_skills` (safe).

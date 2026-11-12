@@ -111,7 +111,7 @@ export const builtinTools: Tool[] = [
     }
   },
   {
-    name: 'generate_image', risk: 'safe', description: 'Generate an image from a text prompt using the free-first chain (included Hugging Face credits, then watermarked Pollinations, then an offline placeholder). Never calls a pay-per-image API. Returns imageUrl, engine, costMode and watermark.',
+    name: 'generate_image', risk: 'safe', description: 'Generate an image from a text prompt using the free-first chain (Hugging Face FLUX.1-schnell then SDXL, Gemini only if GEMINI_API_KEY is set, Pollinations, or a local server). OpenAI and Replicate are not called unless IMAGE_PROVIDERS lists them and their key is set. Returns imageUrl, engine, costMode and watermark.',
     parameters: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
     async run(a) {
       const img = await runFlux(String(a.prompt || ''))

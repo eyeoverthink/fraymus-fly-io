@@ -46,7 +46,7 @@ export const FREE_REGISTRY = {
     cost: 'FREE - sharp local, no API',
     inputs: [{ name: 'imageUrl', type: 'image', required: true }, { name: 'scale', type: 'number', default: 4 }],
     outputs: [{ name: 'imageUrl', type: 'image', description: '4K upscaled image' }],
-    docs: 'Sharp lanczos3 resize by default, not AI upscaling. Real-ESRGAN runs only when ENABLE_PAID_REPLICATE=1 and REPLICATE_API_TOKEN are both set.',
+    docs: 'Sharp lanczos3 resize by default, not AI upscaling. Real-ESRGAN runs only when IMAGE_PROVIDERS lists replicate, REPLICATE_API_TOKEN is set, and ENABLE_PAID_REPLICATE=1.',
     free: true
   },
   'html-preview': {
@@ -65,8 +65,8 @@ export const FREE_REGISTRY = {
     id: 'wan-animate',
     name: 'Wan 2.1 Animate - Video (Optional)',
     replaces: 'Kora Reality',
-    provider: 'Replicate free tier',
-    cost: 'FREE credits',
+    provider: 'Not wired. No video API is called.',
+    cost: 'Not called',
     inputs: [{ name: 'imageUrl', type: 'image' }],
     outputs: [{ name: 'videoUrl', type: 'video' }],
     free: true

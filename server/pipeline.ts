@@ -73,7 +73,7 @@ export async function runPipeline(nodes: any[], edges: any[], opts: { prompt?: s
         const prompt = opts.prompt || node.data?.prompt || 'UGC mirror selfie, iPhone flash'
         const out = await runLlama(prompt, node.data?.systemPrompt)
         r.engine = out.engine; r.mocked = !!out.mocked
-        if (opts.strict && out.mocked) throw new Error('Prompt LLM not configured (set GROQ_API_KEY or PROMPT_LLM_* / OPENAI_*)')
+        if (opts.strict && out.mocked) throw new Error('Prompt LLM not configured (set GROQ_API_KEY or PROMPT_LLM_API_KEY with PROMPT_LLM_BASE_URL)')
         texts[id] = r.text = out.text
       } else if (k === 'flux') {
         const prompt = upstreamText || opts.prompt || node.data?.prompt || 'mirror selfie'

@@ -34,15 +34,17 @@ try {
   process.env.XAI_API_KEY = 'k-xai'
   ok(lc.sidecarEnv(1).XAI_API_KEY === 'k-xai', 'seats: XAI_API_KEY wins over PROMPT_LLM_API_KEY')
   process.env.GEMINI_API_KEY = 'k-gem'; process.env.OPENAI_API_KEY = 'k-oa'
+  ok(lc.liveSeats().map((s) => s.provider).join() === 'xai,gemini', 'seats: default list is xai,gemini; OPENAI_API_KEY alone does not seat OpenAI')
+  process.env.LOGIC_CHAIN_PROVIDERS = 'xai,gemini,openai'
   const seats = lc.liveSeats()
-  ok(seats.map((s) => `${s.provider}:${s.model}`).join() === 'xai:grok-4.3,gemini:gemini-3.5-flash-lite,openai:gpt-4.1-mini', `seats: default models (${seats.map((s) => s.model).join(', ')})`)
+  ok(seats.map((s) => `${s.provider}:${s.model}`).join() === 'xai:grok-4.3,gemini:gemini-3.5-flash-lite,openai:gpt-4.1-mini', `seats: opted-in models (${seats.map((s) => s.model).join(', ')})`)
   ok(seats.find((s) => s.provider === 'openai')?.kind === 'openai', 'seats: OpenAI direct without OPENAI_BASE_URL')
   process.env.OPENAI_BASE_URL = 'https://router.example/v1/'
   const oa = lc.liveSeats().find((s) => s.provider === 'openai')!
   ok(oa.kind === 'openai_compatible' && oa.url === 'https://router.example/v1/chat/completions' && oa.key_env === 'OPENAI_API_KEY', 'seats: OPENAI_BASE_URL makes the OpenAI seat openai_compatible on that router')
   process.env.LOGIC_CHAIN_PROVIDERS = 'gemini'
   ok(lc.liveSeats().map((s) => s.provider).join() === 'gemini', 'seats: LOGIC_CHAIN_PROVIDERS narrows the providers')
-  delete process.env.LOGIC_CHAIN_PROVIDERS
+  process.env.LOGIC_CHAIN_PROVIDERS = 'xai,gemini,openai'
   const live = lc.chainConfig('live')
   ok(live.allow_remote === true && live.slots.every((s: any) => s.kind !== 'demo' && !('provider' in s) && !['k-xai', 'k-gem', 'k-oa', 'k-prompt'].some((v) => Object.values(s).includes(v))), 'config: live slots carry key env NAMES, never key values')
   ok(live.slots[7].key_env === 'XAI_API_KEY', 'config: the Integrator (writes the brief) gets the first provider')

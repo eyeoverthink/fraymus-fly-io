@@ -53,6 +53,7 @@ All settings are environment variables; [.env.example](.env.example) lists every
 | Shopify / buyers | `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_PACK_PRODUCT_ID`, `SHOPIFY_CREDITS_PER_PACK`, `RESEND_API_KEY`, `MAIL_FROM`, `BUYER_PIPELINE_STRICT`, `FREE_CREDITS` |
 | Billing | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_METER_EVENT_NAME` |
 | Story Shorts | `PIPER_BIN`, `PIPER_MODEL`, `PIPER_LENGTH_SCALE`, `PIPER_SENTENCE_SILENCE`, `ESPEAK_*`, `FFMPEG_BIN`, `FFPROBE_BIN`, `SHORTS_MAX_CONCURRENT`, `SHORTS_FFMPEG_THREADS` |
+| Music video | `STUDIO_URL`, `STUDIO_TOKEN` (both unset = demo mode on the Music video page; the token stays on the server) |
 | Logic Chain | `LOGIC_CHAIN`, `LOGIC_CHAIN_PROVIDERS`, `XAI_API_KEY`, `GEMINI_API_KEY` (+ `OPENAI_*`, `PROMPT_LLM_API_KEY` for xAI), `LOGIC_CHAIN_*_MODEL`, `LOGIC_CHAIN_MAX_RUN_CENTS`, `LOGIC_CHAIN_MAX_PLAN_CALLS`, `LOGIC_CHAIN_MAX_SECONDS`, `FRAYMUS_IDENTITY_FILE`, `FRAYMUS_IDENTITY_SEED`, `LOGIC_CHAIN_PYTHON/DIR/PORT/URL` |
 | Media/MCP | `VOICESTUDIO_MCP_URL`, `PHOTOCRAFT_CLI`, `REA_MCP`, `MCP_SERVERS_FILE`, `ALLOW_STDIO_IMPORT`, `AGENTS_DIR`, `SCHEDULER` |
 
@@ -144,4 +145,15 @@ Vertical cartoon story shorts from a narration, made from free offline tools onl
 With `--voice voicestudio` it voices each shot line through [VoiceStudio](https://github.com/debpalash/VoiceStudio) (AGPL, local GPU app, API at `VOICESTUDIO_URL`, default `http://127.0.0.1:3900`), builds word timings (VoiceStudio Whisper, else faster-whisper, else an even split per line), and uploads both so the server uses that take instead of Piper. If VoiceStudio is not reachable it uploads nothing and the server falls back to Piper. `--dry-run --text "..."` tries a voice without sending anything.
 
 **Voices: only clone your own voice, use a designed (synthetic) voice, or a person who agreed to be cloned. Never a celebrity's or an actor's voice.**
+
+## Music Video Maker
+
+The **Music video** tab sends a song, a character (a description, a picture, or both) and a storyline to [fraymus-video-studio](https://github.com/eyeoverthink/fraymus-video-studio) (`studio serve`, recipe `anime-mv`). The browser never sees `STUDIO_URL` or `STUDIO_TOKEN`. Finished cuts, the QC contact sheet and the shot list are saved in the Library (agent `music-video`) with the character, storyline and options on the item.
+
+- **Demo mode**: leave `STUDIO_URL` unset. Make produces a short local sample so the page can be tried without the studio.
+- **Live**: set `STUDIO_URL` (for example `http://127.0.0.1:8790`) and `STUDIO_TOKEN` to the token that studio was started with. If the studio is down, the page says so and Make returns an error; the rest of the app keeps running.
+- Songs are limited to 50 MB (mp3, wav, m4a, flac, ogg). Options: aspect `16:9` or `9:16`, a lyrics master, and backend `hf` or `comfy`. Style is `anime`.
+- API: `GET /api/music-video/status`, `POST /api/music-video/jobs` (multipart), `GET /api/music-video/jobs/:id`, `GET .../files/:name`, `POST .../redo` `{shot}`, `DELETE /api/music-video/jobs/:id`. Redo calls the studio if it exposes a redo route, and otherwise tells you it does not.
+- Try it: `npm run dev:all`, open the Music video tab. If `/api` asks you to sign in, set `WORKSPACE_AUTH=off` in `.env` for local demo, or set `WORKSPACE_ACCESS_TOKEN` and sign in at `/login`.
+- Test: `npm run test:music-video`.
 

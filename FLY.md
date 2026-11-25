@@ -46,6 +46,11 @@ FRAYMUS Logic Chain (all optional; with none set, runs are MOCK and signed by a 
 The sidecar runs inside the same machine (child process on 127.0.0.1). It needs no `[processes]` entry, service or port,
 and keeps its runs on the volume at `/data/logic-chain`.
 
+Music Video Maker (optional). With neither secret set, the Music video page runs in demo mode and does not call out:
+
+- `STUDIO_URL` (base URL of fraymus-video-studio, `studio serve`)
+- `STUDIO_TOKEN` (the bearer token that studio was started with; server-side only, never a build arg)
+
 Override in `fly.toml` [env] if needed: `PROMPT_LLM`, `PROMPT_LLM_BASE_URL`, `PROMPT_LLM_MODEL`.
 
 ## CLI

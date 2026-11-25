@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { apiFetch, errorText } from '../lib/api'
 import { toast } from '../components/Toasts'
 
@@ -50,8 +50,12 @@ export default function MusicVideoPage({ onOpenLibrary }: { onOpenLibrary?: () =
   const [redoNote, setRedoNote] = useState('')
   const [shotlist, setShotlist] = useState('')
 
+  const selected = useRef<string | null>(null)
   const loadRecent = useCallback(() => get('/api/music-video/jobs').then((d) => setRecent(d.jobs || [])).catch(() => {}), [])
-  const openJob = useCallback((id: string) => get('/api/music-video/jobs/' + id).then(setJob).catch((e) => toast('error', e.message)), [])
+  const openJob = useCallback((id: string) => {
+    selected.current = id
+    return get('/api/music-video/jobs/' + id).then((j) => { if (selected.current === id) setJob(j); return j }).catch((e) => { if (selected.current === id) toast('error', e.message) })
+  }, [])
 
   useEffect(() => {
     get('/api/music-video/status').then(setStatus).catch((e) => setStatus({ mode: 'live', reachable: false, recipe: 'anime-mv', recipeReady: false, message: e.message }))
@@ -65,7 +69,7 @@ export default function MusicVideoPage({ onOpenLibrary }: { onOpenLibrary?: () =
     return () => URL.revokeObjectURL(url)
   }, [picture])
 
-  const running = job?.status === 'queued' || job?.status === 'running'
+  const running = job?.status === 'queued' || job?.status === 'running' || job?.status === 'submitting'
   useEffect(() => {
     if (!job || !running) return
     const t = setInterval(() => openJob(job.id), 1500)
@@ -106,7 +110,7 @@ export default function MusicVideoPage({ onOpenLibrary }: { onOpenLibrary?: () =
     if (picture) body.append('character_image', picture)
     setBusy(true)
     try {
-      const r = await apiFetch('/api/music-video/jobs', { method: 'POST', body })
+      const r = await apiFetch('/api/music-video/jobs', { method: 'POST', body, headers: { 'Idempotency-Key': crypto.randomUUID() } })
       if (!r.ok) throw new Error(await errorText(r))
       const created = await r.json()
       setRedoNote('')
@@ -131,9 +135,10 @@ export default function MusicVideoPage({ onOpenLibrary }: { onOpenLibrary?: () =
 
   const remove = async () => {
     if (!job || !confirm(`Remove “${job.title}” from this list? Files already in the Library stay there.`)) return
-    const r = await apiFetch('/api/music-video/jobs/' + job.id, { method: 'DELETE' })
+    const id = job.id
+    const r = await apiFetch('/api/music-video/jobs/' + id, { method: 'DELETE' })
     if (!r.ok) return toast('error', await errorText(r))
-    setJob(null)
+    if (selected.current === id) { selected.current = null; setJob(null) }
     loadRecent()
   }
 

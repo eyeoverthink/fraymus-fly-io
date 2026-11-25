@@ -77,6 +77,7 @@ const studio = createServer(async (req, res) => {
   return json(res, 404, { error: 'not found' })
 })
 
+const win = process.platform === 'win32'
 function boot(envExtra) {
   const dataDir = mkdtempSync(join(tmpdir(), 'mv-test-'))
   const port = String(5400 + Math.floor(Math.random() * 800))
@@ -85,9 +86,14 @@ function boot(envExtra) {
     WORKSPACE_AUTH: '', WORKSPACE_ACCESS_TOKEN: TOKEN, CLERK_SECRET_KEY: '', SUPABASE_URL: '', LIBRARY_SYNC_MS: '600000',
     GROQ_API_KEY: '', HF_TOKEN: '', IMAGE_PROVIDERS: 'placeholder', LOGIC_CHAIN: 'off', STUDIO_URL: '', STUDIO_TOKEN: '', ...envExtra
   }
-  const p = spawn('npx', ['tsx', 'server/index.ts'], { env, stdio: process.env.DEBUG ? 'inherit' : 'ignore', detached: true })
+  const p = spawn(win ? 'npx.cmd' : 'npx', ['tsx', 'server/index.ts'], { env, stdio: process.env.DEBUG ? 'inherit' : 'ignore', shell: win, detached: !win })
   const base = `http://127.0.0.1:${port}`
-  const stop = () => new Promise((r) => { p.on('exit', () => setTimeout(r, 200)); try { process.kill(-p.pid) } catch { p.kill() } try { rmSync(dataDir, { recursive: true, force: true }) } catch {} })
+  const stop = () => new Promise((r) => {
+    const done = () => { try { rmSync(dataDir, { recursive: true, force: true }) } catch {} setTimeout(r, 200) }
+    p.on('exit', done)
+    if (win) spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' })
+    else { try { process.kill(-p.pid) } catch { p.kill() } }
+  })
   return { base, stop }
 }
 async function ready(base) {
@@ -120,12 +126,13 @@ try {
   const mock = boot({})
   const down = boot({ STUDIO_URL: 'http://127.0.0.1:9', STUDIO_TOKEN: 'down-token' })
   const notoken = boot({ STUDIO_URL: 'http://127.0.0.1:9', STUDIO_TOKEN: '' })
-  apps.push(live, mock, down, notoken)
-  const up = await Promise.all([ready(live.base), ready(mock.base), ready(down.base), ready(notoken.base)])
+  const pub = boot({ STUDIO_URL: 'http://studio.example', STUDIO_TOKEN: 'public-http-token' })
+  apps.push(live, mock, down, notoken, pub)
+  const up = await Promise.all([ready(live.base), ready(mock.base), ready(down.base), ready(notoken.base), ready(pub.base)])
   ok(up.every(Boolean), 'servers started')
   if (!up.every(Boolean)) throw new Error('a test server did not start')
 
-  const L = api(live.base), M = api(mock.base), D = api(down.base), N = api(notoken.base)
+  const L = api(live.base), M = api(mock.base), D = api(down.base), N = api(notoken.base), P = api(pub.base)
   ok((await fetch(live.base + '/api/music-video/status')).status === 401, 'gate: /api/music-video requires the workspace token')
 
   const st = await L('/api/music-video/status')
@@ -160,6 +167,7 @@ try {
   const lib = await L('/api/library?tag=' + encodeURIComponent(made.body.id) + '&limit=20')
   ok(lib.body.items?.length >= 5, `library: outputs saved (${lib.body.items?.length})`)
   ok(lib.body.items.some((i) => i.meta?.character?.includes('black hair') && JSON.stringify(i.meta?.storyline || '').includes('Rain on the glass')), 'library: character and storyline stored as metadata')
+  ok(lib.body.items.every((i) => !String(i.mediaUrl || '').startsWith('/outputs/')), 'library: renders are not published on the public /outputs path')
   const pipe = lib.body.items.find((i) => i.type === 'pipeline')
   const detail = pipe ? await L('/api/library/items/' + pipe.id) : { body: {} }
   ok(String(detail.body?.content || '').includes('Rain on the glass'), 'library: pipeline snapshot keeps the storyline')
@@ -192,6 +200,13 @@ try {
   const faceOnly = await L('/api/music-video/jobs', { method: 'POST', body: jobForm({ storyline: 'One quiet verse', consent: 'true' }, [songFile, faceFile]) })
   ok(faceOnly.status === 202 && lastJobBody?.files?.character_image && !lastJobBody?.options?.character, 'create: a character image is enough when there is no description')
 
+  const idem = 'idem-' + randomBytes(8).toString('hex')
+  const again = () => jobForm({ character: 'A girl', storyline: 'Same rain', consent: 'true' }, [songFile])
+  const first = await L('/api/music-video/jobs', { method: 'POST', body: again(), headers: { 'Idempotency-Key': idem } })
+  const postsAfter = studioPosts
+  const retry = await L('/api/music-video/jobs', { method: 'POST', body: again(), headers: { 'Idempotency-Key': idem } })
+  ok(first.status === 202 && retry.status === 202 && retry.body.id === first.body.id && studioPosts === postsAfter, 'idempotency: a retry returns the first job and does not render twice')
+
   const downStatus = await D('/api/music-video/status')
   ok(downStatus.status === 200 && downStatus.body.mode === 'live' && downStatus.body.reachable === false && /not responding|unreachable/i.test(downStatus.body.message || ''), 'down: status is a clear message, not a crash')
   const downMake = await D('/api/music-video/jobs', { method: 'POST', body: jobForm({ character: 'A girl', storyline: 'Rain', consent: 'true' }, [songFile]) })
@@ -199,6 +214,10 @@ try {
 
   const missingTok = await N('/api/music-video/status')
   ok(missingTok.status === 200 && missingTok.body.reachable === false && /STUDIO_TOKEN/.test(missingTok.body.message || ''), 'misconfigured: missing STUDIO_TOKEN is reported')
+  const publicHttp = await P('/api/music-video/status')
+  ok(publicHttp.status === 200 && publicHttp.body.reachable === false && /https/i.test(publicHttp.body.message || ''), 'public http studio URL is refused')
+  const publicMake = await P('/api/music-video/jobs', { method: 'POST', body: jobForm({ character: 'A girl', storyline: 'Rain', consent: 'true' }, [songFile]) })
+  ok(publicMake.status === 503 && /https/i.test(publicMake.body?.error || ''), 'public http: Make does not send the token')
 
   const mockStatus = await M('/api/music-video/status')
   ok(mockStatus.status === 200 && mockStatus.body.mode === 'mock' && mockStatus.body.reachable === true, 'mock: STUDIO_URL unset is demo mode')

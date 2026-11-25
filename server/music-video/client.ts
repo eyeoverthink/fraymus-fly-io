@@ -7,6 +7,25 @@ import { pipeline } from 'node:stream/promises'
 import { ANIME_MV, buildStudioBody, type MvInput } from './contract'
 
 const FILE_CAP = 512 * 1024 * 1024
+
+/** Plain HTTP is only for a studio on this machine or a private network (Fly .internal included). */
+export function studioUrlError(url: string): string | null {
+  let parsed: URL
+  try { parsed = new URL(url) } catch { return 'STUDIO_URL is not a valid URL.' }
+  if (parsed.protocol === 'https:') return null
+  if (parsed.protocol !== 'http:') return 'STUDIO_URL must be an http or https URL.'
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host === '::1') return null
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+  if (m) {
+    const a = Number(m[1]), b = Number(m[2])
+    if (a === 127 || a === 10 || a === 0) return null
+    if (a === 192 && b === 168) return null
+    if (a === 172 && b >= 16 && b <= 31) return null
+    if (a === 169 && b === 254) return null
+  }
+  return 'STUDIO_URL must use https unless it is a loopback, private, or .internal address.'
+}
 const MOCK_SHOTS = 3
 
 export class StudioError extends Error {
@@ -52,6 +71,8 @@ async function studioFetch(path: string, init: RequestInit = {}, timeoutMs = 200
   const cfg = studioConfig()
   if (cfg.mode !== 'live') throw new StudioError('The video studio is not configured.', 503)
   if (!cfg.token) throw new StudioError('STUDIO_URL is set but STUDIO_TOKEN is empty, so the studio cannot be called.', 503)
+  const urlError = studioUrlError(cfg.url)
+  if (urlError) throw new StudioError(urlError, 503)
   let res: Response
   try {
     res = await fetch(cfg.url + path, {
@@ -175,9 +196,9 @@ export async function pullFile(studioId: string, name: string, dest: string): Pr
 export async function removeRemote(studioId: string) {
   if (!studioId) return
   if (studioConfig().mode === 'mock') { mockJobs.delete(studioId); return }
-  try {
-    await studioFetch(`/jobs/${encodeURIComponent(studioId)}`, { method: 'DELETE' }, 8000)
-  } catch { /* the local row is already going away */ }
+  const res = await studioFetch(`/jobs/${encodeURIComponent(studioId)}`, { method: 'DELETE' }, 8000)
+  if (res.ok || res.status === 404) { await res.body?.cancel().catch(() => {}); return }
+  throw new StudioError(await errorText(res), res.status >= 500 ? 502 : res.status)
 }
 
 // Redo is not part of the studio's base API. Try the two likely paths; a 404/405 means it is not offered.

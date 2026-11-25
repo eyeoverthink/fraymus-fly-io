@@ -68,6 +68,7 @@ If a Clerk user later signs in with the same verified email, the buyer balance m
     #           Free Studio needs FREE_STUDIO_URL, FREE_STUDIO_PASS, and FREE_STUDIO_MEDIA_KEY.
     #           Buyer runs stay on BUYER_IMAGE_PROVIDERS=huggingface and refund when that route cannot answer.
     #           CLERK_SECRET_KEY / VITE_CLERK_PUBLISHABLE_KEY (locks the workspace UI to signed-in users), MCP_ADMIN_TOKEN
+    #           Music video (optional): STUDIO_URL and STUDIO_TOKEN. Unset = demo mode. Names only; never commit values.
     fly deploy
     curl https://<app>.fly.dev/health
 

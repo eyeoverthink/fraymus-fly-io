@@ -8,10 +8,11 @@ import { apiFetch, errorText } from './lib/api'
 import AgentsPage from './agents/AgentsPage'
 import ConnectPage from './agents/ConnectPage'
 import LibraryPage from './library/LibraryPage'
+import MusicVideoPage from './music-video/MusicVideoPage'
 import { Toasts, toast } from './components/Toasts'
 
 export default function App() {
-  const [view, setView] = useState<'agents' | 'canvas' | 'library' | 'connect'>('agents')
+  const [view, setView] = useState<'agents' | 'canvas' | 'library' | 'connect' | 'video'>('agents')
   const { isRunning, executionLog, deployedUrl, setDeployedUrl } = useWorkflowStore()
   const [showLogs, setShowLogs] = useState(false)
 
@@ -65,14 +66,14 @@ export default function App() {
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#0a0a0a', color: '#e5e5e5' }}>
       <nav style={{ display: 'flex', gap: 4, padding: '6px 12px', borderBottom: '1px solid #222', background: '#0e0e0e' }}>
-        {(['agents', 'canvas', 'library', 'connect'] as const).map((v) => (
+        {(['agents', 'canvas', 'video', 'library', 'connect'] as const).map((v) => (
           <button key={v} onClick={() => setView(v)} style={{ fontSize: 12, padding: '4px 14px', borderRadius: 20, border: '1px solid #333', cursor: 'pointer', background: view === v ? '#fff' : '#1a1a1a', color: view === v ? '#000' : '#aaa', fontWeight: 700 }}>
-            {v === 'agents' ? 'Agents' : v === 'connect' ? 'Connect' : v === 'library' ? 'Library' : 'Workflow canvas'}
+            {v === 'agents' ? 'Agents' : v === 'connect' ? 'Connect' : v === 'library' ? 'Library' : v === 'video' ? 'Music video' : 'Workflow canvas'}
           </button>
         ))}
       </nav>
       <div style={{ flex: 1, minHeight: 0 }}>
-        {view === 'agents' ? <AgentsPage /> : view === 'connect' ? <ConnectPage /> : view === 'library' ? <LibraryPage /> : canvasView}
+        {view === 'agents' ? <AgentsPage /> : view === 'connect' ? <ConnectPage /> : view === 'library' ? <LibraryPage /> : view === 'video' ? <MusicVideoPage onOpenLibrary={() => setView('library')} /> : canvasView}
       </div>
       <Toasts />
     </div>
